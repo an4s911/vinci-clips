@@ -38,7 +38,23 @@ interface Platform {
 }
 interface CropParameters { width: number; height: number; x: number; y: number; centerX: number; centerY: number; }
 interface ReframedVideo { filename: string; url: string; platform: string; platformName: string; aspectRatio: string; cropParameters: CropParameters; }
-interface CaptionStyle { id: string; name: string; description: string; }
+interface CaptionStyle {
+  id: string;
+  name: string;
+  description: string;
+  preview: {
+    fontFamily: string;
+    fontWeight: number;
+    textColor: string;
+    backgroundColor: string;
+    borderColor: string;
+    borderWidth: number;
+    textShadow: string;
+    portraitFontSize: number;
+    squareFontSize: number;
+    landscapeFontSize: number;
+  };
+}
 interface ReframeModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -47,6 +63,7 @@ interface ReframeModalProps {
   originalFilename: string;
   videoDimensions?: { width: number; height: number };
   generatedClipUrl?: string;
+  clipDefinition?: any;
   transcriptData?: any[]; // Pass transcript data for active speaker detection
 }
 
@@ -58,24 +75,28 @@ const PLATFORMS: Platform[] = [
 ];
 
 // NEW: Helper to generate CSS for caption style previews
-const getCaptionStyleCSS = (styleId: string): React.CSSProperties => {
+const getCaptionStyleCSS = (style: CaptionStyle, platformId: string): React.CSSProperties => {
+    const layout = platformId === 'youtube' ? 'landscape' : platformId === 'instagram' ? 'square' : 'portrait';
+    const fontSize = layout === 'portrait'
+        ? style.preview.portraitFontSize
+        : layout === 'landscape'
+            ? style.preview.landscapeFontSize
+            : style.preview.squareFontSize;
     const baseStyle: React.CSSProperties = {
         position: 'absolute', bottom: '15%', left: '50%', transform: 'translateX(-50%)',
-        textAlign: 'center', fontSize: '1.2rem', fontWeight: 'bold', padding: '0.2em 0.5em',
-        borderRadius: '8px', width: '90%', lineHeight: '1.3',
+        textAlign: 'center', fontSize: `${fontSize}px`, fontWeight: style.preview.fontWeight, padding: '0.2em 0.5em',
+        borderRadius: '8px', width: layout === 'portrait' ? '68%' : '80%', lineHeight: '1.2',
+        fontFamily: style.preview.fontFamily,
+        color: style.preview.textColor,
+        backgroundColor: style.preview.backgroundColor,
+        textShadow: style.preview.textShadow,
+        border: style.preview.borderWidth > 0 ? `${style.preview.borderWidth}px solid ${style.preview.borderColor}` : 'none'
     };
-    switch (styleId) {
-        case 'bold-center': return { ...baseStyle, color: 'white', textShadow: '2px 2px 4px #000' };
-        case 'neon-pop': return { ...baseStyle, color: '#FF6B9D', textShadow: '0 0 8px #FFD93D, 2px 2px 4px #000', fontFamily: "'Comic Sans MS', cursive, sans-serif" };
-        case 'typewriter': return { ...baseStyle, color: 'white', backgroundColor: 'rgba(0,0,0,0.6)', fontFamily: "'Courier New', monospace" };
-        case 'bubble': return { ...baseStyle, color: 'black', backgroundColor: '#fff', border: '2px solid #000' };
-        case 'minimal-clean': return { ...baseStyle, color: 'white', backgroundColor: 'rgba(0,0,0,0.5)', fontWeight: 'normal' };
-        default: return baseStyle;
-    }
+    return baseStyle;
 };
 
 const ReframeModal: React.FC<ReframeModalProps> = ({
-  isOpen, onClose, transcriptId, videoUrl, originalFilename, generatedClipUrl, transcriptData
+  isOpen, onClose, transcriptId, videoUrl, originalFilename, generatedClipUrl, clipDefinition
 }) => {
   // --- State Management (no major changes, `currentTab` removed) ---
   const [selectedPlatform, setSelectedPlatform] = useState<string>('tiktok');
@@ -94,8 +115,10 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
   const [startTime, setStartTime] = useState<number>(0);
   const [endTime, setEndTime] = useState<number>(0);
   const [activeSpeakerFace, setActiveSpeakerFace] = useState<any | null>(null);
+  const [analysisMode, setAnalysisMode] = useState<'center' | 'detection' | null>(null);
   // NEW: State to manage the visibility of advanced settings
   const [isAdvancedSettingsOpen, setIsAdvancedSettingsOpen] = useState(false);
+  const assetKey = generatedClipUrl || videoUrl;
 
   // --- Hooks and Handlers (no major changes to logic) ---
   useEffect(() => {
@@ -122,31 +145,79 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
     } catch (error) { console.error('Failed to fetch caption styles:', error); }
   };
 
-  const handleDetectionComplete = async (detectionResults: any[]) => {
-    setDetections(detectionResults);
-    setError(null);
-
-    // Simple active speaker detection: assume the first face is the speaker
-    if (detectionResults.length > 0) {
-        setActiveSpeakerFace(detectionResults[0].boundingBox);
-    }
-
+  const analyzeVideo = async (detectionResults: any[]) => {
     try {
       setIsAnalyzing(true);
+      setError(null);
+      const speakerFace = detectionResults.length > 0 ? detectionResults[0].boundingBox : null;
+      setActiveSpeakerFace(speakerFace);
       const response = await axios.post(`${API_URL}/clips/reframe/analyze`, {
-        transcriptId, 
-        targetPlatform: selectedPlatform, 
-        detections: detectionResults, 
+        transcriptId,
+        targetPlatform: selectedPlatform,
+        detections: detectionResults,
         generatedClipUrl,
-        activeSpeakerFace
+        activeSpeakerFace: speakerFace
       });
       if (response.data.success) {
+        setDetections(detectionResults);
         setCropParameters(response.data.analysis.cropParameters);
         setPreviewUrl(response.data.analysis.previewUrl);
-      } else { setError('Failed to analyze video for reframing'); }
-    } catch (err: any) { setError(err.response?.data?.error || 'Failed to analyze video');
-    } finally { setIsAnalyzing(false); }
+        setAnalysisMode(response.data.analysis.mode || null);
+      } else {
+        setError('Failed to analyze video for reframing');
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to analyze video');
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
+
+  const handleDetectionComplete = async (detectionResults: any[]) => {
+    await analyzeVideo(detectionResults);
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let cancelled = false;
+
+    const loadSavedState = async () => {
+      try {
+        setIsAnalyzing(true);
+        const response = await axios.get(`${API_URL}/clips/transcripts/${transcriptId}`);
+        if (cancelled) return;
+
+        const assetState = response.data.reframeAssets?.[assetKey];
+        const savedAnalysis = assetState?.analyses?.[selectedPlatform];
+        const savedDetections = assetState?.detections || [];
+
+        if (savedAnalysis?.cropParameters && savedAnalysis?.previewUrl) {
+          setDetections(savedDetections);
+          setActiveSpeakerFace(savedDetections[0]?.boundingBox || null);
+          setCropParameters(savedAnalysis.cropParameters);
+          setPreviewUrl(savedAnalysis.previewUrl);
+          setAnalysisMode(savedAnalysis.mode || null);
+          setError(null);
+          setIsAnalyzing(false);
+          return;
+        }
+
+        setIsAnalyzing(false);
+        await analyzeVideo(savedDetections);
+      } catch (error: any) {
+        if (cancelled) return;
+        setIsAnalyzing(false);
+        setError(error.response?.data?.error || 'Failed to load saved reframe data');
+      }
+    };
+
+    loadSavedState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, selectedPlatform, transcriptId, assetKey]);
 
   const handleGenerate = async () => {
     if (!cropParameters) { setError('No crop parameters. Please analyze first.'); return; }
@@ -161,7 +232,8 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
         outputName, 
         generatedClipUrl,
         captions: addCaptions ? { enabled: true, style: selectedCaptionStyle } : { enabled: false },
-        activeSpeakerFace
+        activeSpeakerFace,
+        clipDefinition
       });
       clearInterval(progressInterval); setGenerationProgress(100);
       if (response.data.success) { setReframedVideo(response.data.reframedVideo);
@@ -172,7 +244,7 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
 
   const resetModal = () => {
     setDetections([]); setCropParameters(null); setPreviewUrl(null); setReframedVideo(null);
-    setError(null); setIsAnalyzing(false); setIsGenerating(false); setGenerationProgress(0);
+    setError(null); setIsAnalyzing(false); setIsGenerating(false); setGenerationProgress(0); setAnalysisMode(null);
   };
 
   const handleClose = () => { resetModal(); onClose(); };
@@ -243,7 +315,11 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
                       <div className="space-y-4">
                         <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
                           <h4 className="font-semibold text-green-800">Analysis Complete</h4>
-                          <p className="text-sm text-green-700 mt-1">Optimal crop found for {PLATFORMS.find(p=>p.id===selectedPlatform)?.name}.</p>
+                          <p className="text-sm text-green-700 mt-1">
+                            {analysisMode === 'center'
+                              ? `Using center crop for ${PLATFORMS.find(p=>p.id===selectedPlatform)?.name}.`
+                              : `Optimal crop found for ${PLATFORMS.find(p=>p.id===selectedPlatform)?.name}.`}
+                          </p>
                         </div>
                         <Button variant="outline" onClick={() => setPreviewUrl(null)}>Re-analyze</Button>
                       </div>
@@ -281,7 +357,7 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
                         {captionStyles.map(style => (
                           <div key={style.id} onClick={() => setSelectedCaptionStyle(style.id)}
                             className={`relative flex-shrink-0 w-32 h-48 bg-gray-800 rounded-lg cursor-pointer transition-all overflow-hidden ${selectedCaptionStyle === style.id ? 'ring-2 ring-blue-500' : ''}`}>
-                            <div style={getCaptionStyleCSS(style.id)}>Sample Text</div>
+                            <div style={getCaptionStyleCSS(style, selectedPlatform)}>Sample Text</div>
                             <div className="absolute bottom-0 w-full p-2 bg-black/50">
                               <p className="text-white text-xs font-medium truncate">{style.name}</p>
                             </div>

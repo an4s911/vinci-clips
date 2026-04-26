@@ -12,6 +12,18 @@ interface CaptionStyle {
     id: string;
     name: string;
     description: string;
+    preview: {
+        fontFamily: string;
+        fontWeight: number;
+        textColor: string;
+        backgroundColor: string;
+        borderColor: string;
+        borderWidth: number;
+        textShadow: string;
+        portraitFontSize: number;
+        squareFontSize: number;
+        landscapeFontSize: number;
+    };
 }
 
 interface CaptionGeneratorProps {
@@ -27,6 +39,7 @@ export default function CaptionGenerator({ transcriptId, videoUrl }: CaptionGene
     const [error, setError] = useState('');
     const [showPreview, setShowPreview] = useState(false);
     const [previewText, setPreviewText] = useState('Hello world! This is a preview of your captions.');
+    const [previewAspectRatio, setPreviewAspectRatio] = useState('9 / 16');
 
     useEffect(() => {
         fetchCaptionStyles();
@@ -86,66 +99,45 @@ export default function CaptionGenerator({ transcriptId, videoUrl }: CaptionGene
         }
     };
 
-    const getCaptionStyleCSS = (styleId: string) => {
+    const getSelectedStyle = () => styles.find((style) => style.id === selectedStyle);
+
+    const getPreviewLayout = () => {
+        const [width, height] = previewAspectRatio.split('/').map((part) => Number(part.trim()));
+        if (!width || !height) return 'portrait';
+        const aspect = width / height;
+        if (aspect < 0.9) return 'portrait';
+        if (aspect > 1.2) return 'landscape';
+        return 'square';
+    };
+
+    const getCaptionStyleCSS = (style: CaptionStyle) => {
+        const layout = getPreviewLayout();
+        const fontSize = layout === 'portrait'
+            ? style.preview.portraitFontSize
+            : layout === 'landscape'
+                ? style.preview.landscapeFontSize
+                : style.preview.squareFontSize;
         const baseStyle = {
             position: 'absolute' as const,
-            bottom: '20%',
+            bottom: layout === 'portrait' ? '12%' : '10%',
             left: '50%',
             transform: 'translateX(-50%)',
             textAlign: 'center' as const,
-            fontSize: '24px',
-            fontWeight: 'bold' as const,
-            padding: '8px 16px',
+            fontSize: `${fontSize}px`,
+            fontWeight: style.preview.fontWeight as React.CSSProperties['fontWeight'],
+            padding: '6px 12px',
             borderRadius: '8px',
-            maxWidth: '80%',
+            maxWidth: layout === 'portrait' ? '65%' : '75%',
             wordWrap: 'break-word' as const,
             zIndex: 10,
+            fontFamily: style.preview.fontFamily,
+            color: style.preview.textColor,
+            background: style.preview.backgroundColor,
+            textShadow: style.preview.textShadow,
+            border: style.preview.borderWidth > 0 ? `${style.preview.borderWidth}px solid ${style.preview.borderColor}` : 'none',
+            lineHeight: 1.2,
         };
-
-        switch (styleId) {
-            case 'bold-center':
-                return {
-                    ...baseStyle,
-                    color: 'white',
-                    textShadow: '2px 2px 4px rgba(0,0,0,0.8), -1px -1px 2px rgba(0,0,0,0.8)',
-                    fontFamily: 'Arial, sans-serif',
-                };
-            case 'neon-pop':
-                return {
-                    ...baseStyle,
-                    color: '#FF6B9D',
-                    textShadow: '0 0 10px #FFD93D, 2px 2px 4px rgba(0,0,0,0.8)',
-                    fontFamily: 'Arial, sans-serif',
-                    background: 'rgba(0,0,0,0.3)',
-                };
-            case 'typewriter':
-                return {
-                    ...baseStyle,
-                    color: 'white',
-                    textShadow: '1px 1px 2px rgba(0,0,0,0.8)',
-                    fontFamily: 'Courier New, monospace',
-                    background: 'rgba(0,0,0,0.5)',
-                };
-            case 'bubble':
-                return {
-                    ...baseStyle,
-                    color: 'white',
-                    background: 'rgba(76, 205, 196, 0.9)',
-                    border: '2px solid rgba(255,255,255,0.3)',
-                    boxShadow: '0 4px 8px rgba(0,0,0,0.3)',
-                };
-            case 'minimal-clean':
-                return {
-                    ...baseStyle,
-                    color: 'white',
-                    background: 'rgba(0,0,0,0.4)',
-                    fontFamily: 'Arial, sans-serif',
-                    fontWeight: 'normal' as const,
-                    border: '1px solid rgba(255,255,255,0.2)',
-                };
-            default:
-                return baseStyle;
-        }
+        return baseStyle;
     };
 
     return (
@@ -217,17 +209,25 @@ export default function CaptionGenerator({ transcriptId, videoUrl }: CaptionGene
                         </div>
                         
                         <div className="relative">
-                            <div className="relative bg-gray-900 rounded-lg overflow-hidden" style={{ aspectRatio: '9/16', height: '300px' }}>
+                            <div className="relative bg-gray-900 rounded-lg overflow-hidden" style={{ aspectRatio: previewAspectRatio, height: '300px' }}>
                                 <video 
                                     src={videoUrl} 
                                     className="w-full h-full object-cover"
                                     muted
                                     poster="/api/placeholder/200/356"
+                                    onLoadedMetadata={(event) => {
+                                        const video = event.currentTarget;
+                                        if (video.videoWidth && video.videoHeight) {
+                                            setPreviewAspectRatio(`${video.videoWidth} / ${video.videoHeight}`);
+                                        }
+                                    }}
                                 />
                                 
-                                <div style={getCaptionStyleCSS(selectedStyle)}>
+                                {getSelectedStyle() && (
+                                    <div style={getCaptionStyleCSS(getSelectedStyle()!)}>
                                     {previewText}
-                                </div>
+                                    </div>
+                                )}
                                 
                                 <div className="absolute top-2 left-2">
                                     <Badge variant="secondary" className="text-xs">

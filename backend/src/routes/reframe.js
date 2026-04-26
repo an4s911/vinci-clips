@@ -5,6 +5,7 @@ const fs = require('fs');
 const ffmpeg = require('fluent-ffmpeg');
 const Transcript = require('../models/Transcript');
 const logger = require('../utils/logger');
+const { moveFileSafe, renderCaptionedVideo } = require('../utils/captioning');
 
 const router = express.Router();
 
@@ -38,9 +39,41 @@ function timeToSeconds(timeStr) {
  * @param {object} videoDimensions - The original video's width and height.
  * @returns {object} The calculated crop parameters {x, y, width, height}.
  */
-function calculateCropForFace(face, videoDimensions) {
+function getTargetAspect(targetRatio) {
+    return targetRatio.width / targetRatio.height;
+}
+
+function roundEven(value) {
+    return Math.max(2, Math.floor(value / 2) * 2);
+}
+
+function calculateCenterCrop(videoDimensions, targetRatio) {
     const { width: videoWidth, height: videoHeight } = videoDimensions;
-    const targetAspect = 9 / 16;
+    const targetAspect = getTargetAspect(targetRatio);
+    const videoAspect = videoWidth / videoHeight;
+
+    let cropWidth;
+    let cropHeight;
+
+    if (videoAspect > targetAspect) {
+        cropHeight = videoHeight;
+        cropWidth = cropHeight * targetAspect;
+    } else {
+        cropWidth = videoWidth;
+        cropHeight = cropWidth / targetAspect;
+    }
+
+    const width = roundEven(cropWidth);
+    const height = roundEven(cropHeight);
+    const x = roundEven((videoWidth - width) / 2);
+    const y = roundEven((videoHeight - height) / 2);
+
+    return { width, height, x, y };
+}
+
+function calculateCropForFace(face, videoDimensions, targetRatio) {
+    const { width: videoWidth, height: videoHeight } = videoDimensions;
+    const targetAspect = getTargetAspect(targetRatio);
 
     // Increased padding for a more cinematic, less tight shot
     const PADDING_FACTOR = 2.5; 
@@ -68,10 +101,10 @@ function calculateCropForFace(face, videoDimensions) {
 
     // Return dimensions rounded to the nearest even number for FFmpeg compatibility
     return {
-        width: Math.floor(cropWidth / 2) * 2,
-        height: Math.floor(cropHeight / 2) * 2,
-        x: Math.floor(cropX / 2) * 2,
-        y: Math.floor(cropY / 2) * 2,
+        width: roundEven(cropWidth),
+        height: roundEven(cropHeight),
+        x: roundEven(cropX),
+        y: roundEven(cropY),
     };
 }
 
@@ -81,7 +114,7 @@ function calculateCropForFace(face, videoDimensions) {
  * @param {object} videoDimensions - The original video's width and height.
  * @returns {string|null} The complex FFmpeg filter string.
  */
-function generateVisualDirectorFilter(allDetections, videoDimensions) {
+function generateVisualDirectorFilter(allDetections, videoDimensions, targetRatio) {
     if (!allDetections || allDetections.length === 0) {
         logger.warn('Cannot generate visual director cut: no detections provided.');
         return null;
@@ -136,7 +169,7 @@ function generateVisualDirectorFilter(allDetections, videoDimensions) {
         const avgDetection = { boundingBox: { left: avgX, top: avgY, width: avgW, height: avgH }};
         return {
             ...scene,
-            crop: calculateCropForFace(avgDetection, videoDimensions)
+            crop: calculateCropForFace(avgDetection, videoDimensions, targetRatio)
         };
     });
 
@@ -179,21 +212,52 @@ function generateVisualDirectorFilter(allDetections, videoDimensions) {
     xExpr += ')'.repeat(sceneCrops.length * 2 - 1) + `'`;
     yExpr += ')'.repeat(sceneCrops.length * 2 - 1) + `'`;
 
-    // Use a fixed 9:16 aspect ratio for width and height
-    const outputWidth = videoDimensions.height * (9/16);
-    const filterString = `crop=w=${outputWidth}:h=${videoDimensions.height}:x=${xExpr}:y=${yExpr}`;
+    const initialCropRounded = sceneCrops[0].crop;
+    const filterString = `crop=w=${initialCropRounded.width}:h=${initialCropRounded.height}:x=${xExpr}:y=${yExpr}`;
     
     logger.info('Generated Visual Director Filter String:', { length: filterString.length });
     return filterString;
+}
+
+function buildStaticCropFilter(cropParameters) {
+    return `crop=${cropParameters.width}:${cropParameters.height}:${cropParameters.x}:${cropParameters.y}`;
+}
+
+function getAssetKey(transcript, generatedClipUrl) {
+    return generatedClipUrl || transcript.videoUrl;
+}
+
+function getAssetState(transcript, generatedClipUrl) {
+    const assetKey = getAssetKey(transcript, generatedClipUrl);
+    const reframeAssets = transcript.reframeAssets || {};
+    return {
+        assetKey,
+        reframeAssets,
+        assetState: reframeAssets[assetKey] || { detections: [], analyses: {} }
+    };
+}
+
+async function persistAssetState(transcript, generatedClipUrl, updater) {
+    const { assetKey, reframeAssets, assetState } = getAssetState(transcript, generatedClipUrl);
+    const nextState = updater(assetState);
+    const nextAssets = {
+        ...reframeAssets,
+        [assetKey]: nextState
+    };
+    await Transcript.findByIdAndUpdate(transcript._id, {
+        reframeAssets: nextAssets
+    });
+    transcript.reframeAssets = nextAssets;
+    return nextState;
 }
 
 
 // --- Express Routes ---
 router.post('/generate', async (req, res) => {
     try {
-        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl } = req.body;
+        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, clipDefinition } = req.body;
         
-        if (!transcriptId || !targetPlatform || !detections) {
+        if (!transcriptId || !targetPlatform) {
             return res.status(400).json({ error: 'Required parameters are missing' });
         }
         
@@ -219,15 +283,20 @@ router.post('/generate', async (req, res) => {
             });
         });
 
-        const directorCutFilter = generateVisualDirectorFilter(detections, videoDimensions);
-        
-        if (!directorCutFilter) {
-            return res.status(500).json({ error: "Failed to generate reframing logic from face detections." });
-        }
+        const { assetState } = getAssetState(transcript, generatedClipUrl);
+        const resolvedDetections = Array.isArray(detections) && detections.length > 0
+            ? detections
+            : (assetState.detections || []);
+        const resolvedCropParameters = cropParameters
+            || assetState.analyses?.[targetPlatform]?.cropParameters
+            || calculateCenterCrop(videoDimensions, targetRatio);
+        const cropFilter = resolvedDetections.length > 0
+            ? generateVisualDirectorFilter(resolvedDetections, videoDimensions, targetRatio)
+            : buildStaticCropFilter(resolvedCropParameters);
 
         await new Promise((resolve, reject) => {
             ffmpeg(tempVideoPath)
-                .videoFilters(directorCutFilter)
+                .videoFilters(cropFilter)
                 .outputOptions(['-c:v libx264', '-crf 23', '-preset medium', '-c:a aac', '-b:a 128k'])
                 .output(outputPath)
                 .on('progress', (progress) => logger.info(`Processing: ${progress.percent}% done`))
@@ -235,10 +304,30 @@ router.post('/generate', async (req, res) => {
                 .on('error', reject)
                 .run();
         });
+
+        let finalSourcePath = outputPath;
+
+        if (captions?.enabled) {
+            const captionedOutputPath = path.join('uploads', 'temp', `captioned_${sanitizedOutputName}`);
+            await renderCaptionedVideo({
+                inputPath: outputPath,
+                outputPath: captionedOutputPath,
+                transcriptSegments: transcript.transcript,
+                styleId: captions.style,
+                clipDefinition,
+                logger
+            });
+            try {
+                fs.unlinkSync(outputPath);
+            } catch (error) {
+                logger.warn(`Failed to clean up temporary reframed file: ${error.message}`);
+            }
+            finalSourcePath = captionedOutputPath;
+        }
         
         const reframedDestPath = path.join('uploads', 'clips', 'reframed', sanitizedOutputName);
         fs.mkdirSync(path.dirname(reframedDestPath), { recursive: true });
-        fs.renameSync(outputPath, reframedDestPath);
+        moveFileSafe(finalSourcePath, reframedDestPath);
         const reframedUrl = `/uploads/clips/reframed/${sanitizedOutputName}`;
         
         res.json({
@@ -280,22 +369,39 @@ router.post('/analyze', async (req, res) => {
         
         const targetRatio = ASPECT_RATIOS[targetPlatform];
         const parsedDetections = typeof detections === 'string' ? JSON.parse(detections) : detections;
-        const cropParams = parsedDetections.length > 0 ? calculateCropForFace(parsedDetections[0], videoDimensions) : null;
-        
-        if (!cropParams) {
-            return res.status(400).json({ error: 'Could not determine crop parameters from detections.' });
-        }
+        const hasDetections = Array.isArray(parsedDetections) && parsedDetections.length > 0;
+        const cropParams = hasDetections
+            ? calculateCropForFace(parsedDetections[0], videoDimensions, targetRatio)
+            : calculateCenterCrop(videoDimensions, targetRatio);
 
         const previewPath = await generatePreviewFrame(videoPath, cropParams);
+        const previewsDir = path.join('uploads', 'previews');
+        fs.mkdirSync(previewsDir, { recursive: true });
         const previewUrl = `/uploads/previews/${path.basename(previewPath)}`;
-        fs.renameSync(previewPath, path.join('uploads', 'previews', path.basename(previewPath)));
+        moveFileSafe(previewPath, path.join(previewsDir, path.basename(previewPath)));
+
+        const savedState = await persistAssetState(transcript, generatedClipUrl, (assetState) => ({
+            ...assetState,
+            detections: hasDetections ? parsedDetections : (assetState.detections || []),
+            analyses: {
+                ...(assetState.analyses || {}),
+                [targetPlatform]: {
+                    cropParameters: cropParams,
+                    previewUrl,
+                    mode: hasDetections ? 'detection' : 'center',
+                    updatedAt: new Date().toISOString()
+                }
+            }
+        }));
         
         res.json({
             success: true,
             analysis: {
                 cropParameters: cropParams,
-                previewUrl
-            }
+                previewUrl,
+                mode: hasDetections ? 'detection' : 'center'
+            },
+            savedAsset: savedState
         });
         
     } catch (error) {

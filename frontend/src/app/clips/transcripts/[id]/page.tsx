@@ -22,10 +22,10 @@ interface ClipSegment {
     end: number;
 }
 
-interface Clip {
-    title: string;
-    start?: number; // For single segment clips
-    end?: number;   // For single segment clips
+    interface Clip {
+        title: string;
+        start?: number; // For single segment clips
+        end?: number;   // For single segment clips
     segments?: ClipSegment[]; // For multi-segment clips
     totalDuration?: number;
 }
@@ -150,7 +150,10 @@ export default function TranscriptDetailPage() {
 
     const openReframeModal = (generatedClip: any, clipIndex: number) => {
         // Pass the generated clip directly - it already contains the final video URL
-        setSelectedClipForReframe(generatedClip);
+        setSelectedClipForReframe({
+            ...generatedClip,
+            clipDefinition: transcript?.clips?.[clipIndex]
+        });
         setIsReframeModalOpen(true);
     };
 
@@ -337,6 +340,7 @@ export default function TranscriptDetailPage() {
                     videoUrl={selectedClipForReframe.url} 
                     originalFilename={selectedClipForReframe.filename || transcript.originalFilename}
                     generatedClipUrl={selectedClipForReframe.url}
+                    clipDefinition={selectedClipForReframe.clipDefinition}
                 />
             )}
         </main>
