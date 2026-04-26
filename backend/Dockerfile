@@ -4,7 +4,10 @@ FROM node:18-alpine
 # Install FFmpeg and other system dependencies
 RUN apk add --no-cache \
     ffmpeg \
+    fontconfig \
     python3 \
+    ttf-dejavu \
+    yt-dlp \
     make \
     g++ \
     && rm -rf /var/cache/apk/*

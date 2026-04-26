@@ -1,6 +1,3 @@
-# Docker Compose configuration for Vinci Clips development
-version: '3.8'
-
 services:
   # MongoDB database
   mongodb:
@@ -50,6 +47,7 @@ services:
       GCP_BUCKET_NAME: ${GCP_BUCKET_NAME}
       GCP_SERVICE_ACCOUNT_PATH: /app/gcp-service-account.json
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
       
       # Redis
       REDIS_HOST: redis
@@ -58,6 +56,8 @@ services:
       - "8080:8080"
     volumes:
       - ./backend/src:/app/src:ro
+      - ./backend/uploads:/app/uploads
+      - ./backend/storage:/app/storage
       - ./backend/temp:/app/temp
       - ./backend/cache:/app/cache
       - ./backend/logs:/app/logs

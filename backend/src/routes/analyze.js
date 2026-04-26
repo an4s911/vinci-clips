@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Transcript = require('../models/Transcript');
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
+const { generateJsonContent } = require('../utils/gemini');
 
 router.post('/:transcriptId', async (req, res) => {
     try {
@@ -14,10 +15,6 @@ router.post('/:transcriptId', async (req, res) => {
         const fullTranscriptText = transcriptDoc.transcript.map(segment => segment.text).join(' ');
 
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({
-            model: process.env.LLM_MODEL || 'gemini-1.5-flash',
-        });
-
         const videoDurationText = transcriptDoc.duration ? ` The video is ${Math.floor(transcriptDoc.duration / 60)}:${String(Math.floor(transcriptDoc.duration % 60)).padStart(2, '0')} long.` : '';
         
         const maxTimeFormatted = Math.floor(transcriptDoc.duration / 60) + ':' + String(Math.floor(transcriptDoc.duration % 60)).padStart(2, '0');
@@ -50,36 +47,35 @@ Output format: JSON array where each object has:
 
 Transcript: ${fullTranscriptText}`;
 
-        const result = await model.generateContent({
+        const { data: suggestedClips, model: resolvedModel } = await generateJsonContent({
+            genAI,
+            logLabel: `Clip analysis for ${transcriptDoc._id}`,
             contents: [{
                 role: 'user',
                 parts: [{ text: prompt }],
             }],
-            generationConfig: {
-                responseMimeType: 'application/json',
-                responseSchema: {
-                    type: 'ARRAY',
-                    items: {
-                        type: 'OBJECT',
-                        properties: {
-                            title: { type: 'STRING' },
-                            start: { type: 'STRING' },
-                            end: { type: 'STRING' },
-                            segments: {
-                                type: 'ARRAY',
-                                items: {
-                                    type: 'OBJECT',
-                                    properties: {
-                                        start: { type: 'STRING' },
-                                        end: { type: 'STRING' },
-                                    },
-                                    required: ['start', 'end'],
+            responseSchema: {
+                type: 'ARRAY',
+                items: {
+                    type: 'OBJECT',
+                    properties: {
+                        title: { type: 'STRING' },
+                        start: { type: 'STRING' },
+                        end: { type: 'STRING' },
+                        segments: {
+                            type: 'ARRAY',
+                            items: {
+                                type: 'OBJECT',
+                                properties: {
+                                    start: { type: 'STRING' },
+                                    end: { type: 'STRING' },
                                 },
+                                required: ['start', 'end'],
                             },
                         },
-                        required: ['title'],
-                        propertyOrdering: ['title', 'start', 'end', 'segments'],
                     },
+                    required: ['title'],
+                    propertyOrdering: ['title', 'start', 'end', 'segments'],
                 },
             },
             safetySettings: [
@@ -101,9 +97,7 @@ Transcript: ${fullTranscriptText}`;
                 },
             ],
         });
-
-        const response = await result.response;
-        const suggestedClips = JSON.parse(response.text());
+        console.log(`Clip analysis for ${transcriptDoc._id} used Gemini model: ${resolvedModel}`);
         
         // Convert MM:SS time format to seconds for database storage
         const convertTimeToSeconds = (timeString) => {

@@ -1,20 +1,51 @@
 const express = require('express');
-const ytdl = require('@distube/ytdl-core');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const Transcript = require('../models/Transcript');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleAIFileManager } = require('@google/generative-ai/server');
+const { generateJsonContent } = require('../utils/gemini');
 
 const router = express.Router();
+const execOptions = { maxBuffer: 10 * 1024 * 1024 };
 
 // Ensure the imports directory exists
 const importsDir = 'uploads/imports';
 if (!fs.existsSync(importsDir)) {
     fs.mkdirSync(importsDir, { recursive: true });
 }
+
+const runCommand = (command, options = execOptions) => new Promise((resolve, reject) => {
+    exec(command, options, (error, stdout, stderr) => {
+        if (error) {
+            error.stderr = stderr;
+            reject(error);
+            return;
+        }
+
+        resolve({ stdout, stderr });
+    });
+});
+
+const runCommandFile = (file, args, options = execOptions) => new Promise((resolve, reject) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+        if (error) {
+            error.stderr = stderr;
+            reject(error);
+            return;
+        }
+
+        resolve({ stdout, stderr });
+    });
+});
+
+const sanitizeFilename = (value) => value
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180) || 'imported-video';
 
 // Platform detection utility
 const detectPlatform = (url) => {
@@ -50,43 +81,29 @@ const validateUrl = (url) => {
 // YouTube video extraction
 const extractYouTubeVideo = async (url) => {
     try {
-        // Validate YouTube URL
-        if (!ytdl.validateURL(url)) {
-            throw new Error('Invalid YouTube URL');
-        }
-
-        // Get video info
-        const info = await ytdl.getInfo(url);
-        const videoDetails = info.videoDetails;
-
-        // Get the best quality video format that includes audio
-        // Try to get a format with both audio and video, fall back if needed
-        let format;
-        try {
-            format = ytdl.chooseFormat(info.formats, { 
-                quality: 'highestvideo',
-                filter: 'audioandvideo' 
-            });
-        } catch (error) {
-            console.log('No audioandvideo format found, trying highest quality with audio...');
-            format = ytdl.chooseFormat(info.formats, { 
-                quality: 'highest',
-                filter: format => format.hasAudio && format.hasVideo
-            });
-        }
+        const { stdout } = await runCommandFile('yt-dlp', [
+            '--dump-single-json',
+            '--no-warnings',
+            '--no-playlist',
+            url
+        ]);
+        const videoDetails = JSON.parse(stdout);
+        const thumbnails = Array.isArray(videoDetails.thumbnails) ? videoDetails.thumbnails : [];
+        const bestThumbnail = thumbnails.length ? thumbnails[thumbnails.length - 1].url : null;
         
         return {
-            title: videoDetails.title,
-            description: videoDetails.description,
-            duration: parseInt(videoDetails.lengthSeconds),
-            thumbnail: videoDetails.thumbnails?.[0]?.url,
+            title: sanitizeFilename(videoDetails.title || videoDetails.fulltitle || 'youtube-import'),
+            description: videoDetails.description || '',
+            duration: Number(videoDetails.duration) || 0,
+            thumbnail: bestThumbnail,
             platform: 'youtube',
             originalUrl: url,
-            downloadUrl: format.url,
-            videoId: videoDetails.videoId
+            downloadUrl: null,
+            videoId: videoDetails.id
         };
     } catch (error) {
-        throw new Error(`YouTube extraction failed: ${error.message}`);
+        const stderr = error.stderr ? ` ${error.stderr}` : '';
+        throw new Error(`YouTube extraction failed: ${error.message}${stderr}`.trim());
     }
 };
 
@@ -122,38 +139,24 @@ const extractVimeoVideo = async (url) => {
     }
 };
 
-// YouTube-specific download using ytdl stream
+// YouTube-specific download using yt-dlp
 const downloadYouTubeVideo = async (url, outputPath) => {
-    return new Promise((resolve, reject) => {
-        try {
-            // Use ytdl to download with audio+video format preference
-            const stream = ytdl(url, {
-                quality: 'highest',
-                filter: format => format.hasAudio && format.hasVideo
-            });
-
-            const writer = fs.createWriteStream(outputPath);
-            stream.pipe(writer);
-
-            stream.on('error', (error) => {
-                console.error('ytdl stream error:', error.message);
-                reject(new Error(`YouTube download failed: ${error.message}`));
-            });
-
-            writer.on('error', (error) => {
-                console.error('File write error:', error.message);
-                reject(new Error(`File write failed: ${error.message}`));
-            });
-
-            writer.on('finish', () => {
-                console.log('YouTube download completed:', outputPath);
-                resolve();
-            });
-
-        } catch (error) {
-            reject(new Error(`YouTube download setup failed: ${error.message}`));
-        }
-    });
+    try {
+        await runCommandFile('yt-dlp', [
+            '--no-playlist',
+            '--format', 'bv*+ba/b',
+            '--merge-output-format', 'mp4',
+            '--output', outputPath,
+            url
+        ], {
+            ...execOptions,
+            maxBuffer: 20 * 1024 * 1024
+        });
+        console.log('YouTube download completed:', outputPath);
+    } catch (error) {
+        const stderr = error.stderr ? ` ${error.stderr}` : '';
+        throw new Error(`YouTube download failed: ${error.message}${stderr}`.trim());
+    }
 };
 
 // Generic video download utility (for other platforms)
@@ -245,7 +248,7 @@ router.post('/url', async (req, res) => {
                 const ffmpegCmd = `ffmpeg -i "${videoPath}" -vn -acodec libmp3lame -q:a 2 "${mp3Path}"`;
                 
                 await new Promise((resolve, reject) => {
-                    exec(ffmpegCmd, (error) => {
+                    exec(ffmpegCmd, execOptions, (error) => {
                         if (error) reject(error);
                         else resolve();
                     });
@@ -256,10 +259,10 @@ router.post('/url', async (req, res) => {
                 
                 try {
                     await new Promise((resolve, reject) => {
-                        exec(thumbnailCmd, (error) => {
-                            if (error) reject(error);
-                            else resolve();
-                        });
+                            exec(thumbnailCmd, execOptions, (error) => {
+                                if (error) reject(error);
+                                else resolve();
+                            });
                     });
                 } catch (thumbnailError) {
                     console.warn('Thumbnail generation failed:', thumbnailError);
@@ -304,15 +307,13 @@ router.post('/url', async (req, res) => {
                     displayName: mp3FileName
                 });
 
-                const model = genAI.getGenerativeModel({
-                    model: process.env.LLM_MODEL || 'gemini-1.5-flash',
-                });
-                
                 const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
 
                 const prompt = "Transcribe the provided audio with word-level timestamps and identify the speaker for each word. Format the output as a JSON array of objects, where each object represents a single word with precise millisecond timing. Each object should have 'start' (in format MM:SS:mmm), 'end' (in format MM:SS:mmm), 'text' (single word), and 'speaker' fields. For example: [{'start': '00:00:000', 'end': '00:00:450', 'text': 'Hello', 'speaker': 'Speaker 1'}, {'start': '00:00:450', 'end': '00:00:890', 'text': 'world', 'speaker': 'Speaker 1'}]";
 
-                const result = await model.generateContent({
+                const { data: transcriptContent, model: resolvedModel } = await generateJsonContent({
+                    genAI,
+                    logLabel: `YouTube transcription for ${transcript._id}`,
                     contents: [{
                         role: 'user',
                         parts: [
@@ -320,27 +321,22 @@ router.post('/url', async (req, res) => {
                             audioPart,
                         ],
                     }],
-                    generationConfig: {
-                        responseMimeType: 'application/json',
-                        responseSchema: {
-                            type: 'ARRAY',
-                            items: {
-                                type: 'OBJECT',
-                                properties: {
-                                    start: { type: 'STRING' },
-                                    end: { type: 'STRING' },
-                                    text: { type: 'STRING' },
-                                    speaker: { type: 'STRING' },
-                                },
-                                required: ['start', 'end', 'text', 'speaker'],
-                                propertyOrdering: ['start', 'end', 'text', 'speaker'],
+                    responseSchema: {
+                        type: 'ARRAY',
+                        items: {
+                            type: 'OBJECT',
+                            properties: {
+                                start: { type: 'STRING' },
+                                end: { type: 'STRING' },
+                                text: { type: 'STRING' },
+                                speaker: { type: 'STRING' },
                             },
+                            required: ['start', 'end', 'text', 'speaker'],
+                            propertyOrdering: ['start', 'end', 'text', 'speaker'],
                         },
                     },
                 });
-
-                const response = await result.response;
-                const transcriptContent = JSON.parse(response.text());
+                console.log(`Transcription for ${transcript._id} used Gemini model: ${resolvedModel}`);
 
                 // Update transcript with transcription and mark as completed
                 const finalTranscript = await Transcript.findByIdAndUpdate(transcript._id, {

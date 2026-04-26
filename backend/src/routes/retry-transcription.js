@@ -6,6 +6,7 @@ const { Storage } = require('@google-cloud/storage');
 const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
+const { generateJsonContent } = require('../utils/gemini');
 
 const router = express.Router();
 const storage = new Storage();
@@ -73,10 +74,6 @@ router.post('/retry/:transcriptId', async (req, res) => {
             displayName: transcript.originalFilename.replace(/\.mp4$/, '.mp3')
         });
 
-        const model = genAI.getGenerativeModel({
-            model: process.env.LLM_MODEL || 'gemini-1.5-flash',
-        });
-        
         const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
 
         const prompt = "Transcribe the provided audio into segments with start and end times, and identify the speaker for each segment. Format the output as a JSON array of objects, where each object has 'start', 'end', 'text', and 'speaker' fields. For example: [{'start': '00:00', 'end': '00:05', 'text': 'Hello world.', 'speaker': 'Speaker 1'}]";
@@ -88,7 +85,9 @@ router.post('/retry/:transcriptId', async (req, res) => {
             setTimeout(() => reject(new Error('Transcription timeout after 5 minutes')), 5 * 60 * 1000);
         });
 
-        const transcriptionPromise = model.generateContent({
+        const transcriptionPromise = generateJsonContent({
+            genAI,
+            logLabel: `Retry transcription for ${transcriptId}`,
             contents: [{
                 role: 'user',
                 parts: [
@@ -96,28 +95,25 @@ router.post('/retry/:transcriptId', async (req, res) => {
                     audioPart,
                 ],
             }],
-            generationConfig: {
-                responseMimeType: 'application/json',
-                responseSchema: {
-                    type: 'ARRAY',
-                    items: {
-                        type: 'OBJECT',
-                        properties: {
-                            start: { type: 'STRING' },
-                            end: { type: 'STRING' },
-                            text: { type: 'STRING' },
-                            speaker: { type: 'STRING' },
-                        },
-                        required: ['start', 'end', 'text', 'speaker'],
-                        propertyOrdering: ['start', 'end', 'text', 'speaker'],
+            responseSchema: {
+                type: 'ARRAY',
+                items: {
+                    type: 'OBJECT',
+                    properties: {
+                        start: { type: 'STRING' },
+                        end: { type: 'STRING' },
+                        text: { type: 'STRING' },
+                        speaker: { type: 'STRING' },
                     },
+                    required: ['start', 'end', 'text', 'speaker'],
+                    propertyOrdering: ['start', 'end', 'text', 'speaker'],
                 },
             },
         });
 
         const result = await Promise.race([transcriptionPromise, timeoutPromise]);
-        const response = await result.response;
-        const transcriptContent = JSON.parse(response.text());
+        const transcriptContent = result.data;
+        console.log(`Retry transcription for ${transcriptId} used Gemini model: ${result.model}`);
         
         console.log(`Transcription completed with ${transcriptContent.length} segments`);
 

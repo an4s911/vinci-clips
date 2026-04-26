@@ -7,6 +7,7 @@ const path = require('path');
 const Transcript = require('../models/Transcript');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleAIFileManager } = require('@google/generative-ai/server');
+const { generateJsonContent } = require('../utils/gemini');
 
 // The application will now use Application Default Credentials (ADC) in all environments.
 // For local development, authenticate by running `gcloud auth application-default login`.
@@ -124,15 +125,13 @@ router.post('/file', upload.single('video'), async (req, res) => {
                     displayName: mp3FileName
                 });
 
-                const model = genAI.getGenerativeModel({
-                    model: process.env.LLM_MODEL || 'gemini-1.5-flash',
-                });
-                
                 const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
 
                 const prompt = "Transcribe the provided audio with word-level timestamps and identify the speaker for each word. Format the output as a JSON array of objects, where each object represents a single word with precise millisecond timing. Each object should have 'start' (in format MM:SS:mmm), 'end' (in format MM:SS:mmm), 'text' (single word), and 'speaker' fields. For example: [{'start': '00:00:000', 'end': '00:00:450', 'text': 'Hello', 'speaker': 'Speaker 1'}, {'start': '00:00:450', 'end': '00:00:890', 'text': 'world', 'speaker': 'Speaker 1'}]";
 
-                const result = await model.generateContent({
+                const { data: transcriptContent, model: resolvedModel } = await generateJsonContent({
+                    genAI,
+                    logLabel: `Upload transcription for ${transcript._id}`,
                     contents: [{
                         role: 'user',
                         parts: [
@@ -140,27 +139,22 @@ router.post('/file', upload.single('video'), async (req, res) => {
                             audioPart,
                         ],
                     }],
-                    generationConfig: {
-                        responseMimeType: 'application/json',
-                        responseSchema: {
-                            type: 'ARRAY',
-                            items: {
-                                type: 'OBJECT',
-                                properties: {
-                                    start: { type: 'STRING' },
-                                    end: { type: 'STRING' },
-                                    text: { type: 'STRING' },
-                                    speaker: { type: 'STRING' },
-                                },
-                                required: ['start', 'end', 'text', 'speaker'],
-                                propertyOrdering: ['start', 'end', 'text', 'speaker'],
+                    responseSchema: {
+                        type: 'ARRAY',
+                        items: {
+                            type: 'OBJECT',
+                            properties: {
+                                start: { type: 'STRING' },
+                                end: { type: 'STRING' },
+                                text: { type: 'STRING' },
+                                speaker: { type: 'STRING' },
                             },
+                            required: ['start', 'end', 'text', 'speaker'],
+                            propertyOrdering: ['start', 'end', 'text', 'speaker'],
                         },
                     },
                 });
-
-                const response = await result.response;
-                const transcriptContent = JSON.parse(response.text());
+                console.log(`Transcription for ${transcript._id} used Gemini model: ${resolvedModel}`);
                 
                 // Update existing transcript with all data and mark as completed
                 transcript.transcript = transcriptContent;
