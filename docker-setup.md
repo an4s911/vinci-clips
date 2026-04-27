@@ -30,12 +30,20 @@ Edit `.env` and fill in your actual values:
 ### 2. Start Development Environment
 
 ```bash
-# Build and start all services
-docker-compose up --build
+# First run or after dependency/Dockerfile changes
+docker compose up --build
+
+# Normal day-to-day development
+docker compose up
 
 # Or run in background
-docker-compose up -d --build
+docker compose up -d
 ```
+
+The frontend runs `npm run dev` and the backend runs `npm run dev` inside their
+containers. Source directories are bind-mounted in development, so edits should
+reload automatically without rebuilding the images. Rebuild only when
+`package.json` / lockfiles or Dockerfiles change.
 
 This will start:
 - **Frontend**: http://localhost:3000

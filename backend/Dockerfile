@@ -1,7 +1,6 @@
 # Backend Dockerfile for Vinci Clips
-FROM node:18-alpine
+FROM node:18-alpine AS base
 
-# Install FFmpeg and other system dependencies
 RUN apk add --no-cache \
     ffmpeg \
     fontconfig \
@@ -9,40 +8,37 @@ RUN apk add --no-cache \
     ttf-dejavu \
     yt-dlp \
     make \
-    g++ \
-    && rm -rf /var/cache/apk/*
+    g++
 
-# Create app directory
 WORKDIR /app
 
-# Copy package files
+FROM base AS deps
 COPY package*.json ./
+RUN npm ci
 
-# Install dependencies
-RUN npm ci --only=production && npm cache clean --force
+FROM deps AS dev
+ENV NODE_ENV development
+RUN mkdir -p temp cache logs uploads storage
+EXPOSE 8080
+CMD ["npm", "run", "dev"]
 
-# Copy application code
+FROM deps AS prod-deps
+RUN npm prune --omit=dev
+
+FROM base AS runner
+ENV NODE_ENV production
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY . .
+RUN mkdir -p temp cache logs && \
+    addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001 && \
+    chown -R nodejs:nodejs /app
 
-# Create necessary directories
-RUN mkdir -p temp cache logs
-
-# Create non-root user for security
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
-
-# Change ownership of app directory
-RUN chown -R nodejs:nodejs /app
-
-# Switch to non-root user
 USER nodejs
 
-# Expose port
 EXPOSE 8080
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD node -e "require('http').get('http://localhost:8080/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"
 
-# Start the application
 CMD ["node", "src/index.js"]
