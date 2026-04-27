@@ -218,6 +218,7 @@ module.exports = {
     createClipVideoRecord,
     deleteClipVideoVersion,
     getPrimaryClipVideo,
+    getVideoFilePath,
     makeTimestampedFilename,
     normalizeTranscriptClips
 };

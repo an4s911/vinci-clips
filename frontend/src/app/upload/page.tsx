@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
-import { UploadCloud, Clock, CheckCircle, AlertCircle, Loader2, Link as LinkIcon, Globe, Trash2 } from 'lucide-react';
+import { UploadCloud, Clock, CheckCircle, AlertCircle, Loader2, Link as LinkIcon, Globe, Trash2, Download } from 'lucide-react';
 import Link from 'next/link';
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -312,11 +312,19 @@ export default function UploadClient() {
           </Card>
 
           <div className="w-full">
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
               <h2 className="text-2xl font-bold">Recent Videos</h2>
-              <Button asChild variant="outline">
-                <Link href="/clips/transcripts">View All</Link>
-              </Button>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button asChild variant="outline">
+                  <Link href="/clips/bulk-download" className="flex items-center gap-2">
+                    <Download className="h-4 w-4" />
+                    Bulk Download
+                  </Link>
+                </Button>
+                <Button asChild variant="outline">
+                  <Link href="/clips/transcripts">View All</Link>
+                </Button>
+              </div>
             </div>
 
             {loadingTranscripts ? (

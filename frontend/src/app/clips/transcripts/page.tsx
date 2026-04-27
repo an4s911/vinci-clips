@@ -5,7 +5,7 @@ import axios from 'axios';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
-import { Trash2 } from 'lucide-react';
+import { Download, Trash2 } from 'lucide-react';
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 interface Transcript {
     _id: string;
@@ -59,7 +59,15 @@ export default function TranscriptsPage() {
 
     return (
         <main className="container mx-auto p-8">
-            <h1 className="text-4xl font-bold mb-8">All Transcripts</h1>
+            <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <h1 className="text-4xl font-bold">All Transcripts</h1>
+                <Button asChild>
+                    <Link href="/clips/bulk-download">
+                        <Download className="mr-2 h-4 w-4" />
+                        Bulk Download Clips
+                    </Link>
+                </Button>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {transcripts.map((transcript) => (
                     <Card key={transcript._id}>

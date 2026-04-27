@@ -9,11 +9,193 @@ const {
     buildGeneratedClipsMap,
     createClipVideoRecord,
     deleteClipVideoVersion,
+    getPrimaryClipVideo,
+    getVideoFilePath,
     makeTimestampedFilename,
     normalizeTranscriptClips
 } = require('../utils/clipVideos');
 
 const router = express.Router();
+
+function sanitizeZipName(value, fallback = 'clip') {
+    const sanitized = String(value || fallback)
+        .replace(/\.[^.]+$/, '')
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
+    return sanitized || fallback;
+}
+
+function getClipDuration(clip) {
+    if (typeof clip.totalDuration === 'number') {
+        return clip.totalDuration;
+    }
+    if (typeof clip.start === 'number' && typeof clip.end === 'number') {
+        return clip.end - clip.start;
+    }
+    if (Array.isArray(clip.segments)) {
+        return clip.segments.reduce((sum, segment) => sum + (segment.end - segment.start), 0);
+    }
+    return null;
+}
+
+function buildPrimaryClipGroups(transcripts) {
+    return transcripts
+        .map((transcript) => {
+            const clips = normalizeTranscriptClips(transcript)
+                .map((clip, clipIndex) => {
+                    const primaryVideo = getPrimaryClipVideo(clip);
+                    if (!primaryVideo) return null;
+
+                    return {
+                        transcriptId: transcript._id,
+                        clipIndex,
+                        clipTitle: clip.title,
+                        duration: getClipDuration(clip),
+                        video: {
+                            id: primaryVideo.id,
+                            type: primaryVideo.type,
+                            url: primaryVideo.url,
+                            filename: primaryVideo.filename,
+                            createdAt: primaryVideo.createdAt,
+                            platform: primaryVideo.platform,
+                            platformName: primaryVideo.platformName,
+                            aspectRatio: primaryVideo.aspectRatio,
+                            captions: primaryVideo.captions
+                        }
+                    };
+                })
+                .filter(Boolean);
+
+            if (clips.length === 0) return null;
+
+            return {
+                transcriptId: transcript._id,
+                originalFilename: transcript.originalFilename,
+                createdAt: transcript.createdAt,
+                clipCount: clips.length,
+                clips
+            };
+        })
+        .filter(Boolean);
+}
+
+async function resolveSelectedPrimaryClips(selectedClips) {
+    if (!Array.isArray(selectedClips) || selectedClips.length === 0) {
+        throw new Error('Select at least one clip to download.');
+    }
+
+    const resolvedClips = [];
+
+    for (const selected of selectedClips) {
+        const clipIndex = Number.parseInt(selected.clipIndex, 10);
+        if (!selected.transcriptId || !selected.videoId || !Number.isInteger(clipIndex)) {
+            throw new Error('Invalid selected clip payload.');
+        }
+
+        const transcript = await Transcript.findById(selected.transcriptId);
+        if (!transcript) {
+            throw new Error('Selected transcript was not found.');
+        }
+
+        const normalizedClips = normalizeTranscriptClips(transcript);
+        const clip = normalizedClips[clipIndex];
+        if (!clip) {
+            throw new Error(`Selected clip ${clipIndex + 1} was not found.`);
+        }
+
+        const primaryVideo = getPrimaryClipVideo(clip);
+        if (!primaryVideo || primaryVideo.id !== selected.videoId) {
+            throw new Error(`"${clip.title}" is no longer the current primary clip.`);
+        }
+
+        const filePath = getVideoFilePath(primaryVideo);
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`File is missing for "${clip.title}".`);
+        }
+
+        resolvedClips.push({
+            transcript,
+            clip,
+            clipIndex,
+            primaryVideo,
+            filePath
+        });
+    }
+
+    return resolvedClips;
+}
+
+router.get('/primary', async (req, res) => {
+    try {
+        const transcripts = await Transcript.find({});
+        const videos = buildPrimaryClipGroups(transcripts);
+        const totalClips = videos.reduce((sum, video) => sum + video.clipCount, 0);
+
+        res.json({
+            videos,
+            totalVideos: videos.length,
+            totalClips
+        });
+    } catch (error) {
+        console.error('Error fetching primary clips:', error);
+        res.status(500).json({ error: 'Failed to fetch primary clips.' });
+    }
+});
+
+router.post('/download-zip', async (req, res) => {
+    try {
+        let archiver;
+        try {
+            archiver = require('archiver');
+        } catch (error) {
+            return res.status(500).json({
+                error: 'ZIP support is not installed on the backend.',
+                details: 'Run npm install in the backend service and restart it.'
+            });
+        }
+
+        const resolvedClips = await resolveSelectedPrimaryClips(req.body.clips);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        const usedNames = new Set();
+
+        res.attachment('vinci-primary-clips.zip');
+        archive.on('error', (error) => {
+            console.error('Archive stream error:', error);
+            res.destroy(error);
+        });
+        archive.pipe(res);
+
+        resolvedClips.forEach(({ transcript, clip, clipIndex, primaryVideo, filePath }) => {
+            const folder = sanitizeZipName(transcript.originalFilename || transcript._id, 'video');
+            const clipName = sanitizeZipName(clip.title || primaryVideo.filename, `clip-${clipIndex + 1}`);
+            const extension = path.extname(primaryVideo.filename || filePath) || '.mp4';
+            let entryName = `${folder}/${String(clipIndex + 1).padStart(2, '0')}-${clipName}${extension}`;
+            let duplicate = 2;
+
+            while (usedNames.has(entryName)) {
+                entryName = `${folder}/${String(clipIndex + 1).padStart(2, '0')}-${clipName}-${duplicate}${extension}`;
+                duplicate += 1;
+            }
+
+            usedNames.add(entryName);
+            archive.file(filePath, { name: entryName });
+        });
+
+        await archive.finalize();
+    } catch (error) {
+        console.error('Error creating clip zip:', error);
+        if (!res.headersSent) {
+            res.status(400).json({
+                error: 'Failed to create clip ZIP.',
+                details: error.message
+            });
+        } else {
+            res.end();
+        }
+    }
+});
 
 
 // Generate actual video clips from analyzed clips
