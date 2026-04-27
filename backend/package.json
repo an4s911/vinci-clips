@@ -8,6 +8,20 @@
     "dev": "nodemon src/index.js",
     "test": "jest"
   },
+  "nodemonConfig": {
+    "watch": [
+      "src",
+      "package.json"
+    ],
+    "ignore": [
+      "uploads/**",
+      "storage/**",
+      "temp/**",
+      "cache/**",
+      "logs/**"
+    ],
+    "ext": "js,json"
+  },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
     "@google-cloud/functions": "^4.0.0",
