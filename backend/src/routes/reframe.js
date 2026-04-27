@@ -6,6 +6,14 @@ const ffmpeg = require('fluent-ffmpeg');
 const Transcript = require('../models/Transcript');
 const logger = require('../utils/logger');
 const { moveFileSafe, renderCaptionedVideo } = require('../utils/captioning');
+const {
+    appendPrimaryClipVideo,
+    buildGeneratedClipsMap,
+    createClipVideoRecord,
+    getPrimaryClipVideo,
+    makeTimestampedFilename,
+    normalizeTranscriptClips
+} = require('../utils/clipVideos');
 
 const router = express.Router();
 
@@ -255,10 +263,14 @@ async function persistAssetState(transcript, generatedClipUrl, updater) {
 // --- Express Routes ---
 router.post('/generate', async (req, res) => {
     try {
-        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, clipDefinition } = req.body;
+        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, clipDefinition, clipIndex, processingMode, sourceVideoId } = req.body;
+        const captionsOnly = processingMode === 'captions-only';
         
         if (!transcriptId || !targetPlatform) {
             return res.status(400).json({ error: 'Required parameters are missing' });
+        }
+        if (captionsOnly && !captions?.enabled) {
+            return res.status(400).json({ error: 'Captions must be enabled for captions-only mode' });
         }
         
         const transcript = await Transcript.findById(transcriptId);
@@ -268,59 +280,78 @@ router.post('/generate', async (req, res) => {
         
         const targetRatio = ASPECT_RATIOS[targetPlatform];
         if (!targetRatio) return res.status(400).json({ error: 'Invalid target platform' });
+
+        const parsedClipIndex = Number.isInteger(clipIndex) ? clipIndex : Number.parseInt(clipIndex, 10);
+        const shouldAttachToClip = generatedClipUrl || Number.isInteger(parsedClipIndex);
+        if (generatedClipUrl && !Number.isInteger(parsedClipIndex)) {
+            return res.status(400).json({ error: 'clipIndex is required when reframing a generated clip' });
+        }
+        if (Number.isInteger(parsedClipIndex) && (parsedClipIndex < 0 || parsedClipIndex >= (transcript.clips || []).length)) {
+            return res.status(400).json({ error: 'Invalid clip index' });
+        }
         
         const videoUrlToUse = generatedClipUrl || transcript.videoUrl;
         const tempVideoPath = path.join(__dirname, '..', '..', generatedClipUrl ? videoUrlToUse.substring(1) : `uploads/${path.basename(videoUrlToUse)}`);
         
-        const sanitizedOutputName = (outputName || `${transcript.originalFilename.replace(/\.[^.]+$/, '')}_${targetPlatform}_reframed`).replace(/[/\\:*?"<>|]/g, '_') + '.mp4';
+        const outputBaseName = (outputName || `${transcript.originalFilename.replace(/\.[^.]+$/, '')}_${targetPlatform}_reframed`)
+            .replace(/\.mp4$/i, '')
+            .replace(/[/\\:*?"<>|]/g, '_');
+        const sanitizedOutputName = Number.isInteger(parsedClipIndex)
+            ? makeTimestampedFilename(transcriptId, parsedClipIndex, captionsOnly ? '_captioned' : '_reframed')
+            : `${outputBaseName}_${Date.now()}.mp4`;
         const outputPath = path.join('uploads/temp', sanitizedOutputName);
-        
-        const videoDimensions = await new Promise((resolve, reject) => {
-            ffmpeg.ffprobe(tempVideoPath, (err, metadata) => {
-                if (err) return reject(err);
-                const s = metadata.streams.find(s => s.codec_type === 'video');
-                resolve({ width: s.width, height: s.height });
-            });
-        });
-
-        const { assetState } = getAssetState(transcript, generatedClipUrl);
-        const resolvedDetections = Array.isArray(detections) && detections.length > 0
-            ? detections
-            : (assetState.detections || []);
-        const resolvedCropParameters = cropParameters
-            || assetState.analyses?.[targetPlatform]?.cropParameters
-            || calculateCenterCrop(videoDimensions, targetRatio);
-        const cropFilter = resolvedDetections.length > 0
-            ? generateVisualDirectorFilter(resolvedDetections, videoDimensions, targetRatio)
-            : buildStaticCropFilter(resolvedCropParameters);
-
-        await new Promise((resolve, reject) => {
-            ffmpeg(tempVideoPath)
-                .videoFilters(cropFilter)
-                .outputOptions(['-c:v libx264', '-crf 23', '-preset medium', '-c:a aac', '-b:a 128k'])
-                .output(outputPath)
-                .on('progress', (progress) => logger.info(`Processing: ${progress.percent}% done`))
-                .on('end', resolve)
-                .on('error', reject)
-                .run();
-        });
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
         let finalSourcePath = outputPath;
+
+        if (!captionsOnly) {
+            const videoDimensions = await new Promise((resolve, reject) => {
+                ffmpeg.ffprobe(tempVideoPath, (err, metadata) => {
+                    if (err) return reject(err);
+                    const s = metadata.streams.find(s => s.codec_type === 'video');
+                    resolve({ width: s.width, height: s.height });
+                });
+            });
+
+            const { assetState } = getAssetState(transcript, generatedClipUrl);
+            const resolvedDetections = Array.isArray(detections) && detections.length > 0
+                ? detections
+                : (assetState.detections || []);
+            const resolvedCropParameters = cropParameters
+                || assetState.analyses?.[targetPlatform]?.cropParameters
+                || calculateCenterCrop(videoDimensions, targetRatio);
+            const cropFilter = resolvedDetections.length > 0
+                ? generateVisualDirectorFilter(resolvedDetections, videoDimensions, targetRatio)
+                : buildStaticCropFilter(resolvedCropParameters);
+
+            await new Promise((resolve, reject) => {
+                ffmpeg(tempVideoPath)
+                    .videoFilters(cropFilter)
+                    .outputOptions(['-c:v libx264', '-crf 23', '-preset medium', '-c:a aac', '-b:a 128k'])
+                    .output(outputPath)
+                    .on('progress', (progress) => logger.info(`Processing: ${progress.percent}% done`))
+                    .on('end', resolve)
+                    .on('error', reject)
+                    .run();
+            });
+        }
 
         if (captions?.enabled) {
             const captionedOutputPath = path.join('uploads', 'temp', `captioned_${sanitizedOutputName}`);
             await renderCaptionedVideo({
-                inputPath: outputPath,
+                inputPath: captionsOnly ? tempVideoPath : outputPath,
                 outputPath: captionedOutputPath,
                 transcriptSegments: transcript.transcript,
                 styleId: captions.style,
                 clipDefinition,
                 logger
             });
-            try {
-                fs.unlinkSync(outputPath);
-            } catch (error) {
-                logger.warn(`Failed to clean up temporary reframed file: ${error.message}`);
+            if (!captionsOnly) {
+                try {
+                    fs.unlinkSync(outputPath);
+                } catch (error) {
+                    logger.warn(`Failed to clean up temporary reframed file: ${error.message}`);
+                }
             }
             finalSourcePath = captionedOutputPath;
         }
@@ -329,16 +360,45 @@ router.post('/generate', async (req, res) => {
         fs.mkdirSync(path.dirname(reframedDestPath), { recursive: true });
         moveFileSafe(finalSourcePath, reframedDestPath);
         const reframedUrl = `/uploads/clips/reframed/${sanitizedOutputName}`;
-        
+        let reframedVideo = {
+            filename: sanitizedOutputName,
+            url: reframedUrl,
+            platform: captionsOnly ? null : targetPlatform,
+            platformName: captionsOnly ? 'Original frame' : targetRatio.name,
+            aspectRatio: captionsOnly ? null : `${targetRatio.width}:${targetRatio.height}`,
+            captions: captions?.enabled
+                ? { enabled: true, style: captions.style }
+                : { enabled: false }
+        };
+
+        if (shouldAttachToClip && Number.isInteger(parsedClipIndex)) {
+            const normalizedClips = normalizeTranscriptClips(transcript);
+            const sourceClip = normalizedClips[parsedClipIndex];
+            const sourceVideo = sourceClip.videos?.find(video => video.id === sourceVideoId)
+                || sourceClip.videos?.find(video => video.url === generatedClipUrl)
+                || getPrimaryClipVideo(sourceClip);
+            const videoRecord = createClipVideoRecord({
+                type: 'reframed',
+                url: reframedUrl,
+                filename: sanitizedOutputName,
+                sourceVideoId: sourceVideo?.id || null,
+                platform: captionsOnly ? null : targetPlatform,
+                platformName: captionsOnly ? 'Original frame' : targetRatio.name,
+                aspectRatio: captionsOnly ? null : `${targetRatio.width}:${targetRatio.height}`,
+                captions: reframedVideo.captions
+            });
+
+            await appendPrimaryClipVideo(Transcript, transcript, parsedClipIndex, videoRecord);
+            reframedVideo = {
+                ...reframedVideo,
+                ...videoRecord
+            };
+        }
+
         res.json({
             success: true,
-            reframedVideo: {
-                filename: sanitizedOutputName,
-                url: reframedUrl,
-                platform: targetPlatform,
-                platformName: targetRatio.name,
-                aspectRatio: `${targetRatio.width}:${targetRatio.height}`
-            }
+            reframedVideo,
+            generatedClips: buildGeneratedClipsMap(normalizeTranscriptClips(transcript))
         });
         
     } catch (error) {

@@ -3,6 +3,15 @@ const Transcript = require('../models/Transcript');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const {
+    CLIPS_DIR,
+    appendPrimaryClipVideo,
+    buildGeneratedClipsMap,
+    createClipVideoRecord,
+    deleteClipVideoVersion,
+    makeTimestampedFilename,
+    normalizeTranscriptClips
+} = require('../utils/clipVideos');
 
 const router = express.Router();
 
@@ -11,6 +20,7 @@ const router = express.Router();
 router.post('/generate/:transcriptId', async (req, res) => {
     const { transcriptId } = req.params;
     const { clipIndex } = req.body; // Optional: generate specific clip by index
+    const requestedClipIndex = clipIndex !== undefined ? Number.parseInt(clipIndex, 10) : undefined;
 
     try {
         // Validate transcript ID format
@@ -25,41 +35,29 @@ router.post('/generate/:transcriptId', async (req, res) => {
         }
 
         // Validate clip index if provided
-        if (clipIndex !== undefined && (clipIndex < 0 || clipIndex >= transcript.clips.length)) {
+        if (requestedClipIndex !== undefined && (!Number.isInteger(requestedClipIndex) || requestedClipIndex < 0 || requestedClipIndex >= transcript.clips.length)) {
             return res.status(400).json({ 
                 error: `Invalid clip index. Must be between 0 and ${transcript.clips.length - 1}.` 
             });
         }
 
-        const clipsToGenerate = clipIndex !== undefined ? [transcript.clips[clipIndex]] : transcript.clips;
+        const clipsToGenerate = requestedClipIndex !== undefined ? [transcript.clips[requestedClipIndex]] : transcript.clips;
         const generatedClips = [];
 
         // Ensure clips directory exists
-        const clipsDir = 'uploads/clips';
+        const clipsDir = CLIPS_DIR;
         if (!fs.existsSync(clipsDir)) {
             fs.mkdirSync(clipsDir, { recursive: true });
         }
 
         for (let i = 0; i < clipsToGenerate.length; i++) {
             const clip = clipsToGenerate[i];
-            const actualIndex = clipIndex !== undefined ? clipIndex : i;
+            const actualIndex = requestedClipIndex !== undefined ? requestedClipIndex : i;
             
             try {
-                const outputFilename = `${transcriptId}_clip_${actualIndex}.mp4`;
+                const outputFilename = makeTimestampedFilename(transcriptId, actualIndex);
                 const outputPath = path.join(clipsDir, outputFilename);
                 const clipUrl = `/uploads/clips/${outputFilename}`;
-
-                // Check if the clip already exists
-                if (fs.existsSync(outputPath)) {
-                    console.log(`Clip ${actualIndex} already exists. Returning existing file.`);
-                    generatedClips.push({
-                        index: actualIndex,
-                        title: clip.title,
-                        url: clipUrl,
-                        localPath: outputPath
-                    });
-                    continue; // Skip to the next clip
-                }
                 
                 // Use absolute path for the source video
                 const videoPath = path.join(__dirname, '..', '..', 'uploads', path.basename(transcript.videoUrl));
@@ -72,7 +70,7 @@ router.post('/generate/:transcriptId', async (req, res) => {
                     
                     for (let j = 0; j < clip.segments.length; j++) {
                         const segment = clip.segments[j];
-                        const segmentPath = path.join(clipsDir, `${transcriptId}_clip_${actualIndex}_segment_${j}.mp4`);
+                        const segmentPath = path.join(clipsDir, `${transcriptId}_clip_${actualIndex}_${Date.now()}_segment_${j}.mp4`);
                         
                         const segmentCmd = `ffmpeg -i "${videoPath}" -ss ${segment.start} -t ${segment.end - segment.start} "${segmentPath}"`;
                         
@@ -87,7 +85,7 @@ router.post('/generate/:transcriptId', async (req, res) => {
                     }
                     
                     // Create concat file for FFmpeg
-                    const concatFilePath = path.join(clipsDir, `${transcriptId}_clip_${actualIndex}_concat.txt`);
+                    const concatFilePath = path.join(clipsDir, `${transcriptId}_clip_${actualIndex}_${Date.now()}_concat.txt`);
                     const concatContent = segmentFiles.map(file => `file '${path.resolve(file)}'`).join('\n');
                     fs.writeFileSync(concatFilePath, concatContent);
                     
@@ -118,9 +116,17 @@ router.post('/generate/:transcriptId', async (req, res) => {
                     });
                 }
 
+                const videoRecord = createClipVideoRecord({
+                    type: 'generated',
+                    url: clipUrl,
+                    filename: outputFilename
+                });
+                await appendPrimaryClipVideo(Transcript, transcript, actualIndex, videoRecord);
+
                 generatedClips.push({
                     index: actualIndex,
                     title: clip.title,
+                    ...videoRecord,
                     url: clipUrl,
                     localPath: outputPath
                 });
@@ -144,7 +150,8 @@ router.post('/generate/:transcriptId', async (req, res) => {
 
         res.json({
             message: `Generated ${generatedClips.length} clip(s) successfully.`,
-            clips: generatedClips
+            clips: generatedClips,
+            generatedClips: buildGeneratedClipsMap(normalizeTranscriptClips(transcript))
         });
 
     } catch (error) {
@@ -153,4 +160,38 @@ router.post('/generate/:transcriptId', async (req, res) => {
     }
 });
 
-module.exports = router; 
+router.delete('/:transcriptId/:clipIndex/videos/:videoId', async (req, res) => {
+    const { transcriptId, videoId } = req.params;
+    const clipIndex = Number.parseInt(req.params.clipIndex, 10);
+
+    try {
+        const transcript = await Transcript.findById(transcriptId);
+        if (!transcript) {
+            return res.status(404).json({ error: 'Transcript not found.' });
+        }
+
+        if (!Number.isInteger(clipIndex) || clipIndex < 0 || clipIndex >= (transcript.clips || []).length) {
+            return res.status(400).json({ error: 'Invalid clip index.' });
+        }
+
+        const updatedTranscript = await deleteClipVideoVersion(Transcript, transcript, clipIndex, videoId);
+        if (!updatedTranscript) {
+            return res.status(404).json({ error: 'Video version not found.' });
+        }
+
+        const clips = normalizeTranscriptClips(updatedTranscript);
+        res.json({
+            success: true,
+            clips,
+            generatedClips: buildGeneratedClipsMap(clips)
+        });
+    } catch (error) {
+        console.error('Error deleting clip video version:', error);
+        res.status(500).json({
+            error: 'Failed to delete clip video version.',
+            details: error.message
+        });
+    }
+});
+
+module.exports = router;

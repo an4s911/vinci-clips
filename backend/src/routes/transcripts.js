@@ -1,6 +1,10 @@
 const express = require('express');
 const Transcript = require('../models/Transcript');
 const path = require('path');
+const {
+    buildGeneratedClipsMap,
+    normalizeTranscriptClips
+} = require('../utils/clipVideos');
 
 const router = express.Router();
 
@@ -13,8 +17,6 @@ router.get('/', async (req, res) => {
         res.status(500).send({ message: 'Failed to fetch transcripts: ' + error.message });
     }
 });
-
-const fs = require('fs');
 
 // Get a single transcript by ID
 router.get('/:id', async (req, res) => {
@@ -30,22 +32,8 @@ router.get('/:id', async (req, res) => {
             transcriptObject.videoUrl = `/uploads/${path.basename(transcriptObject.videoUrl)}`;
         }
 
-        // Check for existing generated clips
-        const clipsDir = path.join(__dirname, '..', '..', 'uploads', 'clips');
-        const existingClips = {};
-        if (fs.existsSync(clipsDir) && transcriptObject.clips && transcriptObject.clips.length > 0) {
-            transcriptObject.clips.forEach((clip, index) => {
-                const clipFilename = `${transcript._id}_clip_${index}.mp4`;
-                const clipPath = path.join(clipsDir, clipFilename);
-                if (fs.existsSync(clipPath)) {
-                    existingClips[index] = {
-                        url: `/uploads/clips/${clipFilename}`,
-                        title: clip.title
-                    };
-                }
-            });
-        }
-        transcriptObject.generatedClips = existingClips;
+        transcriptObject.clips = normalizeTranscriptClips(transcriptObject);
+        transcriptObject.generatedClips = buildGeneratedClipsMap(transcriptObject.clips);
 
         res.status(200).json(transcriptObject);
     } catch (error) {
@@ -109,4 +97,4 @@ router.delete('/:id', async (req, res) => {
     }
 });
 
-module.exports = router; 
+module.exports = router;
