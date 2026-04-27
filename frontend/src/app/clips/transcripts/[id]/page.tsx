@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from '@/components/ui/button';
 import { useParams, useRouter } from 'next/navigation';
 import ReframeModal from '@/components/ReframeModal';
 import CaptionGenerator from '@/components/CaptionGenerator';
-import { Wand2 } from 'lucide-react';
+import { Download, ExternalLink, Trash2, Wand2 } from 'lucide-react';
 import StreamerGameplayCrop from '@/components/StreamerGameplayCrop';
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 interface TranscriptSegment {
@@ -22,12 +22,28 @@ interface ClipSegment {
     end: number;
 }
 
-    interface Clip {
-        title: string;
-        start?: number; // For single segment clips
-        end?: number;   // For single segment clips
+interface ClipVideo {
+    id: string;
+    type: 'generated' | 'reframed';
+    url: string;
+    filename: string;
+    createdAt: string;
+    sourceVideoId: string | null;
+    platform: string | null;
+    platformName: string | null;
+    aspectRatio: string | null;
+    captions: { enabled: boolean; style?: string };
+    title?: string;
+}
+
+interface Clip {
+    title: string;
+    start?: number; // For single segment clips
+    end?: number;   // For single segment clips
     segments?: ClipSegment[]; // For multi-segment clips
     totalDuration?: number;
+    videos?: ClipVideo[];
+    primaryVideoId?: string | null;
 }
 
 interface Transcript {
@@ -38,6 +54,7 @@ interface Transcript {
     mp3Url: string;
     clips: Clip[];
     createdAt: string;
+    generatedClips?: {[key: number]: ClipVideo & { index: number; title: string }};
 }
 
 export default function TranscriptDetailPage() {
@@ -47,21 +64,24 @@ export default function TranscriptDetailPage() {
     const [analyzing, setAnalyzing] = useState(false);
     const [generatingClips, setGeneratingClips] = useState<{[key: number]: boolean}>({});
     const [generatedClips, setGeneratedClips] = useState<{[key: number]: any}>({});
+    const [deletingVersions, setDeletingVersions] = useState<{[key: string]: boolean}>({});
     const [isReframeModalOpen, setIsReframeModalOpen] = useState(false);
     const [selectedClipForReframe, setSelectedClipForReframe] = useState<any>(null);
     const params = useParams();
     const router = useRouter();
     const id = params.id;
 
+    const fetchTranscript = useCallback(async () => {
+        const response = await axios.get(`${API_URL}/clips/transcripts/${id}`);
+        setTranscript(response.data);
+        setGeneratedClips(response.data.generatedClips || {});
+    }, [id]);
+
     useEffect(() => {
         if (id) {
-            const fetchTranscript = async () => {
+            const loadTranscript = async () => {
                 try {
-                    const response = await axios.get(`${API_URL}/clips/transcripts/${id}`);
-                    setTranscript(response.data);
-                    if (response.data.generatedClips) {
-                        setGeneratedClips(response.data.generatedClips);
-                    }
+                    await fetchTranscript();
                 } catch (err) {
                     setError('Failed to fetch transcript details.');
                     console.error(err);
@@ -69,9 +89,9 @@ export default function TranscriptDetailPage() {
                     setLoading(false);
                 }
             };
-            fetchTranscript();
+            loadTranscript();
         }
-    }, [id]);
+    }, [id, fetchTranscript]);
 
     const generateClips = async () => {
         if (!transcript) return;
@@ -112,15 +132,10 @@ export default function TranscriptDetailPage() {
         setError('');
         
         try {
-            const response = await axios.post(`${API_URL}/clips/clips/generate/${transcript._id}`, {
+            await axios.post(`${API_URL}/clips/clips/generate/${transcript._id}`, {
                 clipIndex: clipIndex
             });
-            
-            // Store the generated clip for this specific index
-            setGeneratedClips(prev => ({
-                ...prev, 
-                [clipIndex]: response.data.clips[0] // First clip in response
-            }));
+            await fetchTranscript();
         } catch (err: any) {
             const errorMessage = err.response?.data?.error || `Failed to generate clip ${clipIndex + 1}. Please try again.`;
             const errorDetails = err.response?.data?.details ? ` (${err.response.data.details})` : '';
@@ -148,18 +163,53 @@ export default function TranscriptDetailPage() {
         }
     };
 
-    const openReframeModal = (generatedClip: any, clipIndex: number) => {
+    const openReframeModal = (video: ClipVideo, clipIndex: number) => {
         // Pass the generated clip directly - it already contains the final video URL
         setSelectedClipForReframe({
-            ...generatedClip,
+            ...video,
+            clipIndex,
             clipDefinition: transcript?.clips?.[clipIndex]
         });
         setIsReframeModalOpen(true);
     };
 
+    const deleteClipVersion = async (clipIndex: number, video: ClipVideo) => {
+        if (!transcript) return;
+        const confirmed = confirm('Delete this clip version? The video file will also be removed.');
+        if (!confirmed) return;
+
+        const deletionKey = `${clipIndex}:${video.id}`;
+        setDeletingVersions(prev => ({ ...prev, [deletionKey]: true }));
+        setError('');
+
+        try {
+            await axios.delete(`${API_URL}/clips/clips/${transcript._id}/${clipIndex}/videos/${encodeURIComponent(video.id)}`);
+            await fetchTranscript();
+        } catch (err: any) {
+            const errorMessage = err.response?.data?.error || 'Failed to delete clip version.';
+            const errorDetails = err.response?.data?.details ? ` (${err.response.data.details})` : '';
+            setError(errorMessage + errorDetails);
+            console.error('Clip version deletion error:', err);
+        } finally {
+            setDeletingVersions(prev => ({ ...prev, [deletionKey]: false }));
+        }
+    };
+
     const closeReframeModal = () => {
         setIsReframeModalOpen(false);
         setSelectedClipForReframe(null);
+    };
+
+    const getPreviousVersions = (clip: Clip, primaryVideo?: ClipVideo) => {
+        if (!clip.videos || clip.videos.length === 0 || !primaryVideo) return [];
+        return clip.videos
+            .filter(video => video.id !== primaryVideo.id)
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    };
+
+    const formatVersionDate = (value: string) => {
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleString();
     };
 
     if (loading) {
@@ -222,7 +272,11 @@ export default function TranscriptDetailPage() {
                             )}
                             {transcript.clips && transcript.clips.length > 0 ? (
                                 <div className="mt-4 space-y-4">
-                                    {transcript.clips.map((clip, index) => (
+                                    {transcript.clips.map((clip, index) => {
+                                        const primaryVideo = generatedClips[index] as ClipVideo | undefined;
+                                        const previousVersions = getPreviousVersions(clip, primaryVideo);
+
+                                        return (
                                         <div key={index} className="p-4 bg-muted rounded-lg transition-colors">
                                             <div className="flex items-start justify-between mb-2">
                                                 <div className="font-semibold flex-1">{clip.title}</div>
@@ -272,22 +326,42 @@ export default function TranscriptDetailPage() {
                                             {generatedClips[index] && (
                                                 <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
                                                     <div className="flex items-center justify-between mb-2">
-                                                        <h4 className="text-sm font-semibold text-green-800">Generated Clip</h4>
+                                                        <div>
+                                                            <h4 className="text-sm font-semibold text-green-800">Primary Video</h4>
+                                                            <p className="text-xs text-green-700">
+                                                                {primaryVideo?.type === 'reframed' ? 'Reframed' : 'Generated'}
+                                                                {primaryVideo?.platformName ? ` for ${primaryVideo.platformName}` : ''}
+                                                                {primaryVideo?.createdAt ? ` · ${formatVersionDate(primaryVideo.createdAt)}` : ''}
+                                                            </p>
+                                                        </div>
                                                         <div className="flex items-center gap-2">
                                                             <Button 
                                                                 size="sm" 
                                                                 variant="outline"
-                                                                onClick={() => openReframeModal(generatedClips[index], index)}
+                                                                onClick={() => primaryVideo && openReframeModal(primaryVideo, index)}
                                                                 className="flex items-center gap-1"
                                                             >
                                                                 <Wand2 className="w-3 h-3" />
                                                                 Reframe
                                                             </Button>
                                                             <Button asChild size="sm" variant="outline">
-                                                                <a href={generatedClips[index].url} download target="_blank" rel="noopener noreferrer">
+                                                                <a href={`${API_URL}${generatedClips[index].url}`} download target="_blank" rel="noopener noreferrer">
+                                                                    <Download className="w-3 h-3 mr-1" />
                                                                     Download
                                                                 </a>
                                                             </Button>
+                                                            {primaryVideo && (
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="destructive"
+                                                                    onClick={() => deleteClipVersion(index, primaryVideo)}
+                                                                    disabled={deletingVersions[`${index}:${primaryVideo.id}`]}
+                                                                    className="flex items-center gap-1"
+                                                                >
+                                                                    <Trash2 className="w-3 h-3" />
+                                                                    Delete
+                                                                </Button>
+                                                            )}
                                                         </div>
                                                     </div>
                                                     <video 
@@ -296,10 +370,73 @@ export default function TranscriptDetailPage() {
                                                         className="w-full rounded"
                                                         style={{maxHeight: '300px'}}
                                                     />
+                                                    {previousVersions.length > 0 && (
+                                                        <details className="mt-3 rounded-md border border-green-200 bg-white">
+                                                            <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-green-900">
+                                                                Previous versions ({previousVersions.length})
+                                                            </summary>
+                                                            <div className="divide-y divide-green-100">
+                                                                {previousVersions.map((version) => (
+                                                                    <div key={version.id} className="grid gap-3 p-3 md:grid-cols-[minmax(0,1fr)_180px]">
+                                                                        <div className="space-y-1 text-sm">
+                                                                            <div className="font-medium capitalize text-slate-900">
+                                                                                {version.type}
+                                                                                {version.platformName ? ` · ${version.platformName}` : ''}
+                                                                            </div>
+                                                                            <div className="text-xs text-slate-600">{formatVersionDate(version.createdAt)}</div>
+                                                                            {version.aspectRatio && (
+                                                                                <div className="text-xs text-slate-600">Aspect ratio: {version.aspectRatio}</div>
+                                                                            )}
+                                                                            <div className="flex flex-wrap gap-2 pt-1">
+                                                                                <Button
+                                                                                    size="sm"
+                                                                                    variant="outline"
+                                                                                    className="h-7 px-2 text-xs"
+                                                                                    onClick={() => openReframeModal(version, index)}
+                                                                                >
+                                                                                    <Wand2 className="mr-1 h-3 w-3" />
+                                                                                    Reframe
+                                                                                </Button>
+                                                                                <Button asChild size="sm" variant="outline" className="h-7 px-2 text-xs">
+                                                                                    <a href={`${API_URL}${version.url}`} target="_blank" rel="noopener noreferrer">
+                                                                                        <ExternalLink className="mr-1 h-3 w-3" />
+                                                                                        Preview
+                                                                                    </a>
+                                                                                </Button>
+                                                                                <Button asChild size="sm" variant="outline" className="h-7 px-2 text-xs">
+                                                                                    <a href={`${API_URL}${version.url}`} download={version.filename}>
+                                                                                        <Download className="mr-1 h-3 w-3" />
+                                                                                        Download
+                                                                                    </a>
+                                                                                </Button>
+                                                                                <Button
+                                                                                    size="sm"
+                                                                                    variant="destructive"
+                                                                                    className="h-7 px-2 text-xs"
+                                                                                    onClick={() => deleteClipVersion(index, version)}
+                                                                                    disabled={deletingVersions[`${index}:${version.id}`]}
+                                                                                >
+                                                                                    <Trash2 className="mr-1 h-3 w-3" />
+                                                                                    Delete
+                                                                                </Button>
+                                                                            </div>
+                                                                        </div>
+                                                                        <video
+                                                                            controls
+                                                                            src={`${API_URL}${version.url}`}
+                                                                            className="w-full rounded border bg-black"
+                                                                            style={{maxHeight: '120px'}}
+                                                                        />
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </details>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             ) : (
                                 <p className="mt-4 text-muted-foreground">No clips analyzed yet. Click "Analyze for Clips" to get clip suggestions.</p>
@@ -340,7 +477,10 @@ export default function TranscriptDetailPage() {
                     videoUrl={selectedClipForReframe.url} 
                     originalFilename={selectedClipForReframe.filename || transcript.originalFilename}
                     generatedClipUrl={selectedClipForReframe.url}
+                    sourceVideoId={selectedClipForReframe.id}
                     clipDefinition={selectedClipForReframe.clipDefinition}
+                    clipIndex={selectedClipForReframe.clipIndex}
+                    onGenerationComplete={fetchTranscript}
                 />
             )}
         </main>

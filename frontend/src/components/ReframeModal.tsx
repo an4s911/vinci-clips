@@ -37,7 +37,7 @@ interface Platform {
   description: string;
 }
 interface CropParameters { width: number; height: number; x: number; y: number; centerX: number; centerY: number; }
-interface ReframedVideo { filename: string; url: string; platform: string; platformName: string; aspectRatio: string; cropParameters: CropParameters; }
+interface ReframedVideo { filename: string; url: string; platform: string | null; platformName: string | null; aspectRatio: string | null; cropParameters?: CropParameters; }
 interface CaptionStyle {
   id: string;
   name: string;
@@ -58,11 +58,14 @@ interface CaptionStyle {
 interface ReframeModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onGenerationComplete?: () => Promise<void> | void;
   transcriptId: string;
   videoUrl: string;
   originalFilename: string;
   videoDimensions?: { width: number; height: number };
   generatedClipUrl?: string;
+  sourceVideoId?: string;
+  clipIndex?: number;
   clipDefinition?: any;
   transcriptData?: any[]; // Pass transcript data for active speaker detection
 }
@@ -96,7 +99,7 @@ const getCaptionStyleCSS = (style: CaptionStyle, platformId: string): React.CSSP
 };
 
 const ReframeModal: React.FC<ReframeModalProps> = ({
-  isOpen, onClose, transcriptId, videoUrl, originalFilename, generatedClipUrl, clipDefinition
+  isOpen, onClose, onGenerationComplete, transcriptId, videoUrl, originalFilename, generatedClipUrl, sourceVideoId, clipIndex, clipDefinition
 }) => {
   // --- State Management (no major changes, `currentTab` removed) ---
   const [selectedPlatform, setSelectedPlatform] = useState<string>('tiktok');
@@ -112,6 +115,7 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
   const [captionStyles, setCaptionStyles] = useState<CaptionStyle[]>([]);
   const [selectedCaptionStyle, setSelectedCaptionStyle] = useState<string>('');
   const [addCaptions, setAddCaptions] = useState<boolean>(false);
+  const [keepOriginalFrame, setKeepOriginalFrame] = useState<boolean>(false);
   const [startTime, setStartTime] = useState<number>(0);
   const [endTime, setEndTime] = useState<number>(0);
   const [activeSpeakerFace, setActiveSpeakerFace] = useState<any | null>(null);
@@ -125,11 +129,11 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
     if (isOpen && originalFilename) {
       const platform = PLATFORMS.find(p => p.id === selectedPlatform);
       const baseName = originalFilename.replace(/\.[^.]+$/, '');
-      setOutputName(`${baseName}_${platform?.id}_reframed.mp4`);
+      setOutputName(keepOriginalFrame ? `${baseName}_captioned.mp4` : `${baseName}_${platform?.id}_reframed.mp4`);
       setStartTime(0);
       setEndTime(0);
     }
-  }, [isOpen, originalFilename, selectedPlatform]);
+  }, [isOpen, originalFilename, selectedPlatform, keepOriginalFrame]);
 
   useEffect(() => {
     if (isOpen) fetchCaptionStyles();
@@ -179,6 +183,13 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
+    if (keepOriginalFrame) {
+      setIsAnalyzing(false);
+      setCropParameters(null);
+      setPreviewUrl(null);
+      setAnalysisMode(null);
+      return;
+    }
 
     let cancelled = false;
 
@@ -217,26 +228,43 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, selectedPlatform, transcriptId, assetKey]);
+  }, [isOpen, selectedPlatform, transcriptId, assetKey, keepOriginalFrame]);
+
+  const handleKeepOriginalFrameChange = (enabled: boolean) => {
+    setKeepOriginalFrame(enabled);
+    setError(null);
+    if (enabled) {
+      setAddCaptions(true);
+      setDetections([]);
+      setCropParameters(null);
+      setPreviewUrl(null);
+      setAnalysisMode(null);
+      setIsAnalyzing(false);
+    }
+  };
 
   const handleGenerate = async () => {
-    if (!cropParameters) { setError('No crop parameters. Please analyze first.'); return; }
+    if (!keepOriginalFrame && !cropParameters) { setError('No crop parameters. Please analyze first.'); return; }
+    if (keepOriginalFrame && !addCaptions) { setError('Enable captions to keep the original frame.'); return; }
     try {
       setIsGenerating(true); setGenerationProgress(0); setError(null);
       const progressInterval = setInterval(() => setGenerationProgress(prev => Math.min(prev + Math.random() * 10, 90)), 500);
       const response = await axios.post(`${API_URL}/clips/reframe/generate`, {
         transcriptId, 
         targetPlatform: selectedPlatform, 
-        cropParameters, 
-        detections, 
+        cropParameters: keepOriginalFrame ? null : cropParameters,
+        detections: keepOriginalFrame ? [] : detections,
         outputName, 
         generatedClipUrl,
         captions: addCaptions ? { enabled: true, style: selectedCaptionStyle } : { enabled: false },
         activeSpeakerFace,
-        clipDefinition
+        clipDefinition,
+        clipIndex,
+        sourceVideoId,
+        processingMode: keepOriginalFrame ? 'captions-only' : 'reframe'
       });
       clearInterval(progressInterval); setGenerationProgress(100);
-      if (response.data.success) { setReframedVideo(response.data.reframedVideo);
+      if (response.data.success) { setReframedVideo(response.data.reframedVideo); await onGenerationComplete?.();
       } else { setError('Failed to generate reframed video'); }
     } catch (err: any) { setError(err.response?.data?.error || 'Failed to generate reframed video');
     } finally { setIsGenerating(false); }
@@ -245,6 +273,7 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
   const resetModal = () => {
     setDetections([]); setCropParameters(null); setPreviewUrl(null); setReframedVideo(null);
     setError(null); setIsAnalyzing(false); setIsGenerating(false); setGenerationProgress(0); setAnalysisMode(null);
+    setKeepOriginalFrame(false);
   };
 
   const handleClose = () => { resetModal(); onClose(); };
@@ -286,8 +315,28 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
           ) : (
             // --- SETTINGS VIEW ---
             <>
-              {/* Aspect Ratio Selection */}
               <div className="space-y-3">
+                <Label className="text-base font-medium">Mode</Label>
+                <div className="grid grid-cols-2 gap-3">
+                  <Card onClick={() => handleKeepOriginalFrameChange(false)}
+                    className={`cursor-pointer transition-all p-4 ${!keepOriginalFrame ? 'ring-2 ring-blue-500 bg-blue-50' : 'hover:bg-gray-50'}`}>
+                    <div className="flex items-center gap-3">
+                      <Wand2 className="w-5 h-5" />
+                      <div className="font-medium text-sm">Smart crop</div>
+                    </div>
+                  </Card>
+                  <Card onClick={() => handleKeepOriginalFrameChange(true)}
+                    className={`cursor-pointer transition-all p-4 ${keepOriginalFrame ? 'ring-2 ring-blue-500 bg-blue-50' : 'hover:bg-gray-50'}`}>
+                    <div className="flex items-center gap-3">
+                      <Type className="w-5 h-5" />
+                      <div className="font-medium text-sm">Keep original frame</div>
+                    </div>
+                  </Card>
+                </div>
+              </div>
+
+              {/* Aspect Ratio Selection */}
+              {!keepOriginalFrame && <div className="space-y-3">
                 <Label className="text-base font-medium">1. Aspect Ratio</Label>
                 <div className="grid grid-cols-3 gap-3">
                   {PLATFORMS.map((platform) => (
@@ -300,10 +349,10 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
                     </Card>
                   ))}
                 </div>
-              </div>
+              </div>}
 
               {/* AI Subject Detection & Preview */}
-              <Card>
+              {!keepOriginalFrame && <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2"><Eye className="w-5 h-5" />2. AI Smart Frame</CardTitle>
                   <CardDescription>Our AI finds the best shot. Click the video to start.</CardDescription>
@@ -331,12 +380,12 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
                     </>
                   )}
                 </CardContent>
-              </Card>
+              </Card>}
 
               {/* Captions */}
               <Card>
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2"><Type className="w-5 h-5" />3. Captions</CardTitle>
+                  <CardTitle className="flex items-center gap-2"><Type className="w-5 h-5" />{keepOriginalFrame ? '1' : '3'}. Captions</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {/* REPLACED: Switch with a styled checkbox */}
@@ -395,7 +444,7 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
               {/* Action Buttons */}
               <div className="pt-6 border-t flex justify-between items-center">
                 <Button variant="ghost" onClick={handleClose}>Cancel</Button>
-                <Button size="lg" onClick={handleGenerate} disabled={isGenerating || !cropParameters}>
+                <Button size="lg" onClick={handleGenerate} disabled={isGenerating || (!keepOriginalFrame && !cropParameters) || (keepOriginalFrame && !addCaptions)}>
                   {isGenerating ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Generating... {Math.round(generationProgress)}%</> : 'Generate Clip'}
                 </Button>
               </div>
