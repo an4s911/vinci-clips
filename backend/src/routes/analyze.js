@@ -3,7 +3,15 @@ const router = express.Router();
 const Transcript = require('../models/Transcript');
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const { generateJsonContent } = require('../utils/gemini');
-const { normalizeClipHook } = require('../utils/clipVideos');
+const {
+    buildGeneratedClipsMap,
+    normalizeClipHook,
+    normalizeTranscriptClips
+} = require('../utils/clipVideos');
+const {
+    loadBlockedWordTerms,
+    moderateClipLanguage
+} = require('../utils/clipModeration');
 
 router.post('/:transcriptId', async (req, res) => {
     try {
@@ -16,6 +24,7 @@ router.post('/:transcriptId', async (req, res) => {
         const fullTranscriptText = transcriptDoc.transcript.map(segment => segment.text).join(' ');
 
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const blockedTerms = loadBlockedWordTerms();
         const videoDurationText = transcriptDoc.duration ? ` The video is ${Math.floor(transcriptDoc.duration / 60)}:${String(Math.floor(transcriptDoc.duration % 60)).padStart(2, '0')} long.` : '';
         
         const maxTimeFormatted = Math.floor(transcriptDoc.duration / 60) + ':' + String(Math.floor(transcriptDoc.duration % 60)).padStart(2, '0');
@@ -47,10 +56,14 @@ VALIDATION RULES:
 - Good hook examples: "look what this guy did:", "he instantly regretted this", "this should not have worked", "wait for his reaction", "then everything changed", "a $5 mouse can do this?"
 - Avoid generic summaries like "Discussion about gaming strategy" or "A funny moment from the video".
 - Keep hooks casual, specific, punchy, and written like creator overlay text.
+- Also review each proposed clip for profanity, slurs, or sexually explicit language in the transcript window it uses.
+- Set 'languageFlag' to true when the proposed clip should be hidden for language, and include a short 'languageReason'.
 
 Output format: JSON array where each object has:
 - 'title': descriptive title
 - 'hook': curiosity-driven creator overlay text, 3-10 words. Prefer statements or setup phrases; use questions sparingly.
+- 'languageFlag': boolean moderation signal for profanity/explicit language
+- 'languageReason': short explanation when flagged
 - For single segments: 'start' and 'end' fields  
 - For multi-segments: 'segments' array with objects containing 'start' and 'end'
 
@@ -70,6 +83,8 @@ Transcript: ${fullTranscriptText}`;
                     properties: {
                         title: { type: 'STRING' },
                         hook: { type: 'STRING' },
+                        languageFlag: { type: 'BOOLEAN' },
+                        languageReason: { type: 'STRING' },
                         start: { type: 'STRING' },
                         end: { type: 'STRING' },
                         segments: {
@@ -85,7 +100,7 @@ Transcript: ${fullTranscriptText}`;
                         },
                     },
                     required: ['title'],
-                    propertyOrdering: ['title', 'hook', 'start', 'end', 'segments'],
+                    propertyOrdering: ['title', 'hook', 'languageFlag', 'languageReason', 'start', 'end', 'segments'],
                 },
             },
             safetySettings: [
@@ -117,6 +132,7 @@ Transcript: ${fullTranscriptText}`;
 
         // Validate and process clips
         const validatedClips = [];
+        let filteredClipCount = 0;
         const videoDurationSeconds = transcriptDoc.duration || Infinity;
         
         console.log(`Video duration: ${videoDurationSeconds}s (${Math.floor(videoDurationSeconds / 60)}:${String(videoDurationSeconds % 60).padStart(2, '0')})`);
@@ -158,6 +174,20 @@ Transcript: ${fullTranscriptText}`;
                     if (processedSegments.length > 0 && totalDuration >= 30 && totalDuration <= 90) {
                         processedClip.segments = processedSegments;
                         processedClip.totalDuration = totalDuration;
+                        const moderationResult = moderateClipLanguage({
+                            transcriptSegments: transcriptDoc.transcript,
+                            clip: processedClip,
+                            blockedTerms,
+                            geminiFlag: clip.languageFlag,
+                            geminiReason: clip.languageReason
+                        });
+
+                        if (moderationResult.isBlocked) {
+                            filteredClipCount += 1;
+                            console.warn(`✗ Filtered multi-segment clip "${clip.title}" for language. Local matches: ${moderationResult.localMatches.join(', ') || 'none'}. Gemini flag: ${moderationResult.geminiFlag}. Reason: ${moderationResult.geminiReason || 'n/a'}`);
+                            continue;
+                        }
+
                         validatedClips.push(processedClip);
                         console.log(`✓ Valid multi-segment clip: "${clip.title}" - ${processedSegments.length} segments, ${totalDuration}s total`);
                     } else {
@@ -177,6 +207,20 @@ Transcript: ${fullTranscriptText}`;
                         processedClip.start = startSeconds;
                         processedClip.end = endSeconds;
                         processedClip.totalDuration = totalDuration;
+                        const moderationResult = moderateClipLanguage({
+                            transcriptSegments: transcriptDoc.transcript,
+                            clip: processedClip,
+                            blockedTerms,
+                            geminiFlag: clip.languageFlag,
+                            geminiReason: clip.languageReason
+                        });
+
+                        if (moderationResult.isBlocked) {
+                            filteredClipCount += 1;
+                            console.warn(`✗ Filtered single clip "${clip.title}" for language. Local matches: ${moderationResult.localMatches.join(', ') || 'none'}. Gemini flag: ${moderationResult.geminiFlag}. Reason: ${moderationResult.geminiReason || 'n/a'}`);
+                            continue;
+                        }
+
                         validatedClips.push(processedClip);
                     } else {
                         console.warn(`✗ Rejected single clip "${clip.title}": ${clip.start}-${clip.end} (duration: ${totalDuration}s, video: ${videoDurationSeconds}s)`);
@@ -187,12 +231,24 @@ Transcript: ${fullTranscriptText}`;
             }
         }
 
-        console.log(`Final result: ${validatedClips.length} valid clips out of ${suggestedClips.length} suggested`);
-        
-        transcriptDoc.clips = validatedClips;
-        await Transcript.findByIdAndUpdate(transcriptDoc._id, transcriptDoc);
+        console.log(`Final result: ${validatedClips.length} visible clips out of ${suggestedClips.length} suggested (${filteredClipCount} filtered for language)`);
 
-        res.json(transcriptDoc);
+        transcriptDoc.clips = validatedClips;
+        transcriptDoc.analysisMetadata = {
+            filteredClipCount,
+            visibleClipCount: validatedClips.length,
+            suggestedClipCount: Array.isArray(suggestedClips) ? suggestedClips.length : 0,
+            blockedWordSource: 'backend/config/blocked-words.json',
+            analyzedAt: new Date().toISOString()
+        };
+        const updatedTranscript = await Transcript.findByIdAndUpdate(transcriptDoc._id, transcriptDoc);
+        const normalizedClips = normalizeTranscriptClips(updatedTranscript);
+
+        res.json({
+            ...updatedTranscript,
+            clips: normalizedClips,
+            generatedClips: buildGeneratedClipsMap(normalizedClips)
+        });
 
     } catch (err) {
         console.error(`Server error during analysis: ${err}`);

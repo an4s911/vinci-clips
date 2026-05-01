@@ -37,6 +37,7 @@ storage/
 *.json
 !package*.json
 !tsconfig.json
+!config/blocked-words.json
 
 # OS generated files
 .DS_Store

@@ -62,6 +62,13 @@ interface Transcript {
     mp3Url: string;
     clips: Clip[];
     createdAt: string;
+    analysisMetadata?: {
+        filteredClipCount?: number;
+        visibleClipCount?: number;
+        suggestedClipCount?: number;
+        blockedWordSource?: string;
+        analyzedAt?: string;
+    } | null;
     generatedClips?: {[key: number]: ClipVideo & { index: number; title: string }};
 }
 
@@ -111,6 +118,7 @@ export default function TranscriptDetailPage() {
         try {
             const response = await axios.post(`${API_URL}/clips/analyze/${transcript._id}`);
             setTranscript(response.data);
+            setGeneratedClips(response.data.generatedClips || {});
         } catch (err) {
             setError('Failed to generate clips. Please try again.');
             console.error(err);
@@ -324,6 +332,11 @@ export default function TranscriptDetailPage() {
                                     {error}
                                 </div>
                             )}
+                            {transcript.analysisMetadata?.filteredClipCount ? (
+                                <div className="mb-4 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                                    {transcript.analysisMetadata.filteredClipCount} clip{transcript.analysisMetadata.filteredClipCount === 1 ? '' : 's'} hidden for language.
+                                </div>
+                            ) : null}
                             {transcript.clips && transcript.clips.length > 0 ? (
                                 <div className="mt-4 space-y-4">
                                     {transcript.clips.map((clip, index) => {

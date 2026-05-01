@@ -46,9 +46,15 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
     try {
         const { clips } = req.body;
+        const updatePayload = { clips };
+
+        if (Array.isArray(clips) && clips.length === 0) {
+            updatePayload.analysisMetadata = null;
+        }
+
         const transcript = await Transcript.findByIdAndUpdate(
             req.params.id,
-            { clips: clips },
+            updatePayload,
             { new: true }
         );
         if (!transcript) {
