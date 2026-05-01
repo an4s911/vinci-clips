@@ -263,14 +263,20 @@ async function persistAssetState(transcript, generatedClipUrl, updater) {
 // --- Express Routes ---
 router.post('/generate', async (req, res) => {
     try {
-        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, clipDefinition, clipIndex, processingMode, sourceVideoId } = req.body;
+        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, hook, clipDefinition, clipIndex, processingMode, sourceVideoId } = req.body;
         const captionsOnly = processingMode === 'captions-only';
+        const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
+        const normalizedHook = {
+            enabled: Boolean(hook?.enabled && hookText),
+            text: hookText || undefined
+        };
+        const hasOverlay = Boolean(captions?.enabled || normalizedHook.enabled);
         
         if (!transcriptId || !targetPlatform) {
             return res.status(400).json({ error: 'Required parameters are missing' });
         }
-        if (captionsOnly && !captions?.enabled) {
-            return res.status(400).json({ error: 'Captions must be enabled for captions-only mode' });
+        if (captionsOnly && !hasOverlay) {
+            return res.status(400).json({ error: 'Enable captions or a top hook to keep the original frame.' });
         }
         
         const transcript = await Transcript.findById(transcriptId);
@@ -297,7 +303,7 @@ router.post('/generate', async (req, res) => {
             .replace(/\.mp4$/i, '')
             .replace(/[/\\:*?"<>|]/g, '_');
         const sanitizedOutputName = Number.isInteger(parsedClipIndex)
-            ? makeTimestampedFilename(transcriptId, parsedClipIndex, captionsOnly ? '_captioned' : '_reframed')
+            ? makeTimestampedFilename(transcriptId, parsedClipIndex, captionsOnly ? '_overlay' : '_reframed')
             : `${outputBaseName}_${Date.now()}.mp4`;
         const outputPath = path.join('uploads/temp', sanitizedOutputName);
         fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -336,7 +342,7 @@ router.post('/generate', async (req, res) => {
             });
         }
 
-        if (captions?.enabled) {
+        if (hasOverlay) {
             const captionedOutputPath = path.join('uploads', 'temp', `captioned_${sanitizedOutputName}`);
             await renderCaptionedVideo({
                 inputPath: captionsOnly ? tempVideoPath : outputPath,
@@ -344,6 +350,8 @@ router.post('/generate', async (req, res) => {
                 transcriptSegments: transcript.transcript,
                 styleId: captions.style,
                 clipDefinition,
+                captionsEnabled: Boolean(captions?.enabled),
+                hook: normalizedHook,
                 logger
             });
             if (!captionsOnly) {
@@ -368,6 +376,9 @@ router.post('/generate', async (req, res) => {
             aspectRatio: captionsOnly ? null : `${targetRatio.width}:${targetRatio.height}`,
             captions: captions?.enabled
                 ? { enabled: true, style: captions.style }
+                : { enabled: false },
+            hook: normalizedHook.enabled
+                ? normalizedHook
                 : { enabled: false }
         };
 
@@ -385,7 +396,8 @@ router.post('/generate', async (req, res) => {
                 platform: captionsOnly ? null : targetPlatform,
                 platformName: captionsOnly ? 'Original frame' : targetRatio.name,
                 aspectRatio: captionsOnly ? null : `${targetRatio.width}:${targetRatio.height}`,
-                captions: reframedVideo.captions
+                captions: reframedVideo.captions,
+                hook: reframedVideo.hook
             });
 
             await appendPrimaryClipVideo(Transcript, transcript, parsedClipIndex, videoRecord);

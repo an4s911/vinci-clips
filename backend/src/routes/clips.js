@@ -12,6 +12,7 @@ const {
     getPrimaryClipVideo,
     getVideoFilePath,
     makeTimestampedFilename,
+    normalizeClipHook,
     normalizeTranscriptClips
 } = require('../utils/clipVideos');
 
@@ -62,7 +63,8 @@ function buildPrimaryClipGroups(transcripts) {
                             platform: primaryVideo.platform,
                             platformName: primaryVideo.platformName,
                             aspectRatio: primaryVideo.aspectRatio,
-                            captions: primaryVideo.captions
+                            captions: primaryVideo.captions,
+                            hook: primaryVideo.hook || { enabled: false }
                         }
                     };
                 })
@@ -301,7 +303,8 @@ router.post('/generate/:transcriptId', async (req, res) => {
                 const videoRecord = createClipVideoRecord({
                     type: 'generated',
                     url: clipUrl,
-                    filename: outputFilename
+                    filename: outputFilename,
+                    hook: { enabled: false }
                 });
                 await appendPrimaryClipVideo(Transcript, transcript, actualIndex, videoRecord);
 
@@ -339,6 +342,52 @@ router.post('/generate/:transcriptId', async (req, res) => {
     } catch (error) {
         console.error('Error generating clips:', error);
         res.status(500).json({ error: 'Failed to generate clips.' });
+    }
+});
+
+router.patch('/:transcriptId/:clipIndex/hook', async (req, res) => {
+    const { transcriptId } = req.params;
+    const clipIndex = Number.parseInt(req.params.clipIndex, 10);
+
+    try {
+        const transcript = await Transcript.findById(transcriptId);
+        if (!transcript) {
+            return res.status(404).json({ error: 'Transcript not found.' });
+        }
+
+        if (!Number.isInteger(clipIndex) || clipIndex < 0 || clipIndex >= (transcript.clips || []).length) {
+            return res.status(400).json({ error: 'Invalid clip index.' });
+        }
+
+        const text = typeof req.body.text === 'string' ? req.body.text.trim() : '';
+        const enabled = Boolean(req.body.enabled && text);
+        const normalizedClips = normalizeTranscriptClips(transcript);
+
+        normalizedClips[clipIndex] = {
+            ...normalizedClips[clipIndex],
+            hook: normalizeClipHook({
+                text,
+                enabled,
+                updatedAt: new Date().toISOString()
+            })
+        };
+
+        const updatedTranscript = await Transcript.findByIdAndUpdate(transcript._id, {
+            clips: normalizedClips
+        });
+        const clips = normalizeTranscriptClips(updatedTranscript);
+
+        res.json({
+            success: true,
+            clips,
+            generatedClips: buildGeneratedClipsMap(clips)
+        });
+    } catch (error) {
+        console.error('Error updating clip hook:', error);
+        res.status(500).json({
+            error: 'Failed to update clip hook.',
+            details: error.message
+        });
     }
 });
 

@@ -37,7 +37,8 @@ interface Platform {
   description: string;
 }
 interface CropParameters { width: number; height: number; x: number; y: number; centerX: number; centerY: number; }
-interface ReframedVideo { filename: string; url: string; platform: string | null; platformName: string | null; aspectRatio: string | null; cropParameters?: CropParameters; }
+interface ClipHook { text: string; enabled: boolean; updatedAt?: string | null; }
+interface ReframedVideo { filename: string; url: string; platform: string | null; platformName: string | null; aspectRatio: string | null; cropParameters?: CropParameters; hook?: { enabled: boolean; text?: string }; }
 interface CaptionStyle {
   id: string;
   name: string;
@@ -67,6 +68,7 @@ interface ReframeModalProps {
   sourceVideoId?: string;
   clipIndex?: number;
   clipDefinition?: any;
+  clipHook?: ClipHook;
   transcriptData?: any[]; // Pass transcript data for active speaker detection
 }
 
@@ -98,8 +100,15 @@ const getCaptionStyleCSS = (style: CaptionStyle, platformId: string): React.CSSP
     return baseStyle;
 };
 
+const getHookStyleCSS = (style: CaptionStyle, platformId: string): React.CSSProperties => ({
+    ...getCaptionStyleCSS(style, platformId),
+    top: '12%',
+    bottom: 'auto',
+    width: platformId === 'youtube' ? '76%' : '72%'
+});
+
 const ReframeModal: React.FC<ReframeModalProps> = ({
-  isOpen, onClose, onGenerationComplete, transcriptId, videoUrl, originalFilename, generatedClipUrl, sourceVideoId, clipIndex, clipDefinition
+  isOpen, onClose, onGenerationComplete, transcriptId, videoUrl, originalFilename, generatedClipUrl, sourceVideoId, clipIndex, clipDefinition, clipHook
 }) => {
   // --- State Management (no major changes, `currentTab` removed) ---
   const [selectedPlatform, setSelectedPlatform] = useState<string>('tiktok');
@@ -115,6 +124,8 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
   const [captionStyles, setCaptionStyles] = useState<CaptionStyle[]>([]);
   const [selectedCaptionStyle, setSelectedCaptionStyle] = useState<string>('');
   const [addCaptions, setAddCaptions] = useState<boolean>(false);
+  const [addTopHook, setAddTopHook] = useState<boolean>(false);
+  const [topHookText, setTopHookText] = useState<string>('');
   const [keepOriginalFrame, setKeepOriginalFrame] = useState<boolean>(false);
   const [startTime, setStartTime] = useState<number>(0);
   const [endTime, setEndTime] = useState<number>(0);
@@ -129,11 +140,18 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
     if (isOpen && originalFilename) {
       const platform = PLATFORMS.find(p => p.id === selectedPlatform);
       const baseName = originalFilename.replace(/\.[^.]+$/, '');
-      setOutputName(keepOriginalFrame ? `${baseName}_captioned.mp4` : `${baseName}_${platform?.id}_reframed.mp4`);
+      setOutputName(keepOriginalFrame ? `${baseName}_overlay.mp4` : `${baseName}_${platform?.id}_reframed.mp4`);
       setStartTime(0);
       setEndTime(0);
     }
   }, [isOpen, originalFilename, selectedPlatform, keepOriginalFrame]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const text = clipHook?.text || '';
+    setTopHookText(text);
+    setAddTopHook(Boolean(clipHook?.enabled && text.trim()));
+  }, [isOpen, clipHook?.enabled, clipHook?.text]);
 
   useEffect(() => {
     if (isOpen) fetchCaptionStyles();
@@ -234,7 +252,6 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
     setKeepOriginalFrame(enabled);
     setError(null);
     if (enabled) {
-      setAddCaptions(true);
       setDetections([]);
       setCropParameters(null);
       setPreviewUrl(null);
@@ -245,7 +262,9 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
 
   const handleGenerate = async () => {
     if (!keepOriginalFrame && !cropParameters) { setError('No crop parameters. Please analyze first.'); return; }
-    if (keepOriginalFrame && !addCaptions) { setError('Enable captions to keep the original frame.'); return; }
+    const normalizedHookText = topHookText.trim();
+    const hookEnabled = Boolean(addTopHook && normalizedHookText);
+    if (keepOriginalFrame && !addCaptions && !hookEnabled) { setError('Enable captions or a top hook to keep the original frame.'); return; }
     try {
       setIsGenerating(true); setGenerationProgress(0); setError(null);
       const progressInterval = setInterval(() => setGenerationProgress(prev => Math.min(prev + Math.random() * 10, 90)), 500);
@@ -257,6 +276,7 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
         outputName, 
         generatedClipUrl,
         captions: addCaptions ? { enabled: true, style: selectedCaptionStyle } : { enabled: false },
+        hook: hookEnabled ? { enabled: true, text: normalizedHookText } : { enabled: false },
         activeSpeakerFace,
         clipDefinition,
         clipIndex,
@@ -274,6 +294,7 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
     setDetections([]); setCropParameters(null); setPreviewUrl(null); setReframedVideo(null);
     setError(null); setIsAnalyzing(false); setIsGenerating(false); setGenerationProgress(0); setAnalysisMode(null);
     setKeepOriginalFrame(false);
+    setAddCaptions(false);
   };
 
   const handleClose = () => { resetModal(); onClose(); };
@@ -418,6 +439,44 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
                 </CardContent>
               </Card>
 
+              {/* Top Hook */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Sparkles className="w-5 h-5" />{keepOriginalFrame ? '2' : '4'}. Top Hook</CardTitle>
+                  <CardDescription>Optional top overlay shown for the full clip.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center space-x-3">
+                    <input
+                      type="checkbox"
+                      id="addTopHook"
+                      checked={addTopHook}
+                      onChange={(e) => setAddTopHook(e.target.checked)}
+                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <Label htmlFor="addTopHook" className="text-base cursor-pointer">Burn in Top Hook</Label>
+                  </div>
+                  <textarea
+                    value={topHookText}
+                    onChange={(e) => setTopHookText(e.target.value)}
+                    rows={2}
+                    maxLength={120}
+                    placeholder="Add a short hook for the top of the clip"
+                    className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                  {addTopHook && !topHookText.trim() && (
+                    <p className="text-xs text-amber-700">Hook burn-in will be skipped until text is added.</p>
+                  )}
+                  {addTopHook && captionStyles.length > 0 && selectedCaptionStyle && (
+                    <div className="relative h-32 overflow-hidden rounded-lg bg-gray-800">
+                      <div style={getHookStyleCSS(captionStyles.find(style => style.id === selectedCaptionStyle) || captionStyles[0], selectedPlatform)}>
+                        {topHookText.trim() || 'Hook preview'}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
               {/* REPLACED: Accordion with a Button toggle */}
               <div className="space-y-4">
                 <Button variant="outline" onClick={() => setIsAdvancedSettingsOpen(!isAdvancedSettingsOpen)} className="w-full justify-start">
@@ -444,7 +503,7 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
               {/* Action Buttons */}
               <div className="pt-6 border-t flex justify-between items-center">
                 <Button variant="ghost" onClick={handleClose}>Cancel</Button>
-                <Button size="lg" onClick={handleGenerate} disabled={isGenerating || (!keepOriginalFrame && !cropParameters) || (keepOriginalFrame && !addCaptions)}>
+                <Button size="lg" onClick={handleGenerate} disabled={isGenerating || (!keepOriginalFrame && !cropParameters) || (keepOriginalFrame && !addCaptions && !Boolean(addTopHook && topHookText.trim()))}>
                   {isGenerating ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Generating... {Math.round(generationProgress)}%</> : 'Generate Clip'}
                 </Button>
               </div>

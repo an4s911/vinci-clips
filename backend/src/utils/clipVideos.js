@@ -32,7 +32,17 @@ function getLegacyClipVideo(transcript, clip, clipIndex) {
         platformName: null,
         aspectRatio: null,
         captions: { enabled: false },
+        hook: { enabled: false },
         title: clip.title
+    };
+}
+
+function normalizeClipHook(hook) {
+    const text = typeof hook?.text === 'string' ? hook.text.trim() : '';
+    return {
+        text,
+        enabled: Boolean(hook?.enabled && text),
+        updatedAt: hook?.updatedAt || null
     };
 }
 
@@ -50,6 +60,7 @@ function normalizeClipVideos(transcript, clip, clipIndex) {
             platformName: video.platformName ?? null,
             aspectRatio: video.aspectRatio ?? null,
             captions: video.captions || { enabled: false },
+            hook: video.hook || { enabled: false },
             title: video.title || clip.title
         })).filter(video => video.url)
         : [];
@@ -67,6 +78,7 @@ function normalizeClipVideos(transcript, clip, clipIndex) {
 
     return {
         ...clip,
+        hook: normalizeClipHook(clip.hook),
         videos: normalizedVideos,
         primaryVideoId: primaryVideoId || null
     };
@@ -107,7 +119,8 @@ function createClipVideoRecord({
     platform = null,
     platformName = null,
     aspectRatio = null,
-    captions = { enabled: false }
+    captions = { enabled: false },
+    hook = { enabled: false }
 }) {
     return {
         id: uuidv4(),
@@ -119,7 +132,8 @@ function createClipVideoRecord({
         platform,
         platformName,
         aspectRatio,
-        captions
+        captions,
+        hook
     };
 }
 
@@ -220,5 +234,6 @@ module.exports = {
     getPrimaryClipVideo,
     getVideoFilePath,
     makeTimestampedFilename,
+    normalizeClipHook,
     normalizeTranscriptClips
 };

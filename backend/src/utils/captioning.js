@@ -227,6 +227,49 @@ function buildSubtitleFilter(srtPath, resolvedStyle) {
     return `subtitles='${escapedPath}':force_style='${styleParts.join(',')}'`;
 }
 
+function formatASSTime(totalSeconds) {
+    const safeSeconds = Math.max(0, Number(totalSeconds) || 0);
+    const hours = Math.floor(safeSeconds / 3600);
+    const minutes = Math.floor((safeSeconds % 3600) / 60);
+    const seconds = Math.floor(safeSeconds % 60);
+    const centiseconds = Math.floor((safeSeconds % 1) * 100);
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${centiseconds.toString().padStart(2, '0')}`;
+}
+
+function escapeASSText(text) {
+    return String(text || '')
+        .replace(/\r?\n/g, '\\N')
+        .replace(/[{}]/g, '')
+        .trim();
+}
+
+function buildHookASSContent(text, resolvedStyle, videoDimensions) {
+    const hookFontSize = Math.round(resolvedStyle.fontsize * 1.08);
+    const topMargin = resolvedStyle.layout === 'portrait' ? 70 : resolvedStyle.layout === 'square' ? 48 : 36;
+    const sideMargin = Math.max(32, Math.round(videoDimensions.width * 0.08));
+    const duration = videoDimensions.duration || 24 * 60 * 60;
+
+    return `[Script Info]
+ScriptType: v4.00+
+PlayResX: ${videoDimensions.width}
+PlayResY: ${videoDimensions.height}
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Hook,${resolvedStyle.fontName},${hookFontSize},${convertColorToASS(resolvedStyle.fontcolor)},&H000000FF,${convertColorToASS(resolvedStyle.bordercolor)},&H80000000,-1,0,0,0,100,100,0,0,1,${resolvedStyle.borderw},${resolvedStyle.shadow ? 2 : 0},8,${sideMargin},${sideMargin},${topMargin},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,${formatASSTime(0)},${formatASSTime(duration)},Hook,,0,0,0,,${escapeASSText(text)}
+`;
+}
+
+function buildASSSubtitleFilter(assPath) {
+    return `subtitles='${escapeSubtitlePath(assPath)}'`;
+}
+
 function convertToWordLevel(segments) {
     const words = [];
 
@@ -406,7 +449,8 @@ async function probeVideoDimensions(inputPath) {
 
             resolve({
                 width: stream.width,
-                height: stream.height
+                height: stream.height,
+                duration: metadata.format?.duration || stream.duration || 0
             });
         });
     });
@@ -420,37 +464,62 @@ async function renderCaptionedVideo({
     clipDefinition,
     startTime,
     endTime,
+    captionsEnabled = true,
+    hook = { enabled: false },
     logger = console
 }) {
     const videoDimensions = await probeVideoDimensions(inputPath);
     const resolvedStyle = getResolvedStyle(styleId, videoDimensions);
-    let words = normalizeTranscriptWords(transcriptSegments);
-    words = buildWordsForClip(words, clipDefinition);
-    words = filterWordsByRange(words, startTime, endTime);
-
-    if (words.length === 0) {
-        throw new Error('No words found in specified time range');
-    }
+    const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
+    const hookEnabled = Boolean(hook?.enabled && hookText);
 
     const tempDir = path.dirname(outputPath);
     fs.mkdirSync(tempDir, { recursive: true });
 
-    const srtPath = path.join(tempDir, `${path.basename(outputPath, path.extname(outputPath))}.srt`);
-    const srtContent = buildSRTContent(words, resolvedStyle.maxWordsPerPhrase);
-    fs.writeFileSync(srtPath, srtContent);
+    const tempSubtitlePaths = [];
+    const filters = [];
+    let words = [];
 
-    const subtitleFilter = buildSubtitleFilter(srtPath, resolvedStyle);
+    if (captionsEnabled) {
+        words = normalizeTranscriptWords(transcriptSegments);
+        words = buildWordsForClip(words, clipDefinition);
+        words = filterWordsByRange(words, startTime, endTime);
+
+        if (words.length === 0) {
+            throw new Error('No words found in specified time range');
+        }
+
+        const srtPath = path.join(tempDir, `${path.basename(outputPath, path.extname(outputPath))}.srt`);
+        const srtContent = buildSRTContent(words, resolvedStyle.maxWordsPerPhrase);
+        fs.writeFileSync(srtPath, srtContent);
+        tempSubtitlePaths.push(srtPath);
+        filters.push(buildSubtitleFilter(srtPath, resolvedStyle));
+    }
+
+    if (hookEnabled) {
+        const hookPath = path.join(tempDir, `${path.basename(outputPath, path.extname(outputPath))}_hook.ass`);
+        fs.writeFileSync(hookPath, buildHookASSContent(hookText, resolvedStyle, videoDimensions));
+        tempSubtitlePaths.push(hookPath);
+        filters.push(buildASSSubtitleFilter(hookPath));
+    }
+
+    if (filters.length === 0) {
+        throw new Error('No overlays requested');
+    }
+
     logger.info?.('Caption render configuration', {
         inputPath,
         outputPath,
         layout: resolvedStyle.layout,
         styleId: resolvedStyle.id,
-        maxWordsPerPhrase: resolvedStyle.maxWordsPerPhrase
+        maxWordsPerPhrase: resolvedStyle.maxWordsPerPhrase,
+        captionsEnabled,
+        hookEnabled
     });
 
     await new Promise((resolve, reject) => {
         ffmpeg(inputPath)
-            .videoFilters([subtitleFilter])
+            .videoFilters(filters)
             .outputOptions([
                 '-c:v libx264',
                 '-c:a aac',
@@ -463,14 +532,17 @@ async function renderCaptionedVideo({
             .run();
     });
 
-    try {
-        fs.unlinkSync(srtPath);
-    } catch (error) {
-        logger.warn?.(`Failed to clean up subtitle file: ${error.message}`);
-    }
+    tempSubtitlePaths.forEach((subtitlePath) => {
+        try {
+            fs.unlinkSync(subtitlePath);
+        } catch (error) {
+            logger.warn?.(`Failed to clean up subtitle file: ${error.message}`);
+        }
+    });
 
     return {
         wordCount: words.length,
+        hookEnabled,
         resolvedStyle,
         videoDimensions
     };

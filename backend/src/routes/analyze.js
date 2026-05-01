@@ -3,6 +3,7 @@ const router = express.Router();
 const Transcript = require('../models/Transcript');
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const { generateJsonContent } = require('../utils/gemini');
+const { normalizeClipHook } = require('../utils/clipVideos');
 
 router.post('/:transcriptId', async (req, res) => {
     try {
@@ -39,9 +40,17 @@ VALIDATION RULES:
 - Total duration must be 30-90 seconds
 - Focus on complete thoughts or exchanges
 - Ensure segments make sense when combined
+- Include a short curiosity hook for each clip in the style of YouTube Shorts/TikTok setup text.
+- Hooks should make the viewer want to see what happens next, not summarize the clip.
+- Use a mix of hook shapes: setup lines, cliffhangers, reaction teases, bold claims, and occasional questions.
+- Questions are allowed, but most hooks should not be questions unless the clip naturally fits one.
+- Good hook examples: "look what this guy did:", "he instantly regretted this", "this should not have worked", "wait for his reaction", "then everything changed", "a $5 mouse can do this?"
+- Avoid generic summaries like "Discussion about gaming strategy" or "A funny moment from the video".
+- Keep hooks casual, specific, punchy, and written like creator overlay text.
 
 Output format: JSON array where each object has:
 - 'title': descriptive title
+- 'hook': curiosity-driven creator overlay text, 3-10 words. Prefer statements or setup phrases; use questions sparingly.
 - For single segments: 'start' and 'end' fields  
 - For multi-segments: 'segments' array with objects containing 'start' and 'end'
 
@@ -60,6 +69,7 @@ Transcript: ${fullTranscriptText}`;
                     type: 'OBJECT',
                     properties: {
                         title: { type: 'STRING' },
+                        hook: { type: 'STRING' },
                         start: { type: 'STRING' },
                         end: { type: 'STRING' },
                         segments: {
@@ -75,7 +85,7 @@ Transcript: ${fullTranscriptText}`;
                         },
                     },
                     required: ['title'],
-                    propertyOrdering: ['title', 'start', 'end', 'segments'],
+                    propertyOrdering: ['title', 'hook', 'start', 'end', 'segments'],
                 },
             },
             safetySettings: [
@@ -115,7 +125,15 @@ Transcript: ${fullTranscriptText}`;
         for (const clip of suggestedClips) {
             try {
                 let totalDuration = 0;
-                let processedClip = { title: clip.title };
+                const hookText = typeof clip.hook === 'string' ? clip.hook.trim() : '';
+                let processedClip = {
+                    title: clip.title,
+                    hook: normalizeClipHook({
+                        text: hookText,
+                        enabled: Boolean(hookText),
+                        updatedAt: hookText ? new Date().toISOString() : null
+                    })
+                };
 
                 if (clip.segments && Array.isArray(clip.segments)) {
                     // Multi-segment clip

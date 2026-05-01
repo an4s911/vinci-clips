@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { useParams, useRouter } from 'next/navigation';
 import ReframeModal from '@/components/ReframeModal';
 import CaptionGenerator from '@/components/CaptionGenerator';
-import { Download, ExternalLink, Trash2, Wand2 } from 'lucide-react';
+import { Download, ExternalLink, Save, Trash2, Wand2 } from 'lucide-react';
 import StreamerGameplayCrop from '@/components/StreamerGameplayCrop';
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 interface TranscriptSegment {
@@ -33,7 +33,14 @@ interface ClipVideo {
     platformName: string | null;
     aspectRatio: string | null;
     captions: { enabled: boolean; style?: string };
+    hook?: { enabled: boolean; text?: string };
     title?: string;
+}
+
+interface ClipHook {
+    text: string;
+    enabled: boolean;
+    updatedAt: string | null;
 }
 
 interface Clip {
@@ -42,6 +49,7 @@ interface Clip {
     end?: number;   // For single segment clips
     segments?: ClipSegment[]; // For multi-segment clips
     totalDuration?: number;
+    hook: ClipHook;
     videos?: ClipVideo[];
     primaryVideoId?: string | null;
 }
@@ -65,6 +73,7 @@ export default function TranscriptDetailPage() {
     const [generatingClips, setGeneratingClips] = useState<{[key: number]: boolean}>({});
     const [generatedClips, setGeneratedClips] = useState<{[key: number]: any}>({});
     const [deletingVersions, setDeletingVersions] = useState<{[key: string]: boolean}>({});
+    const [savingHooks, setSavingHooks] = useState<{[key: number]: boolean}>({});
     const [isReframeModalOpen, setIsReframeModalOpen] = useState(false);
     const [selectedClipForReframe, setSelectedClipForReframe] = useState<any>(null);
     const params = useParams();
@@ -168,9 +177,54 @@ export default function TranscriptDetailPage() {
         setSelectedClipForReframe({
             ...video,
             clipIndex,
-            clipDefinition: transcript?.clips?.[clipIndex]
+            clipDefinition: transcript?.clips?.[clipIndex],
+            clipHook: transcript?.clips?.[clipIndex]?.hook
         });
         setIsReframeModalOpen(true);
+    };
+
+    const updateClipHookDraft = (clipIndex: number, updates: Partial<ClipHook>) => {
+        setTranscript(prev => {
+            if (!prev) return prev;
+            const clips = prev.clips.map((clip, index) => {
+                if (index !== clipIndex) return clip;
+                const currentHook = clip.hook || { text: '', enabled: false, updatedAt: null };
+                const nextText = updates.text ?? currentHook.text;
+                return {
+                    ...clip,
+                    hook: {
+                        ...currentHook,
+                        ...updates,
+                        text: nextText,
+                        enabled: updates.enabled ?? currentHook.enabled
+                    }
+                };
+            });
+            return { ...prev, clips };
+        });
+    };
+
+    const saveClipHook = async (clipIndex: number) => {
+        if (!transcript) return;
+        const hook = transcript.clips[clipIndex]?.hook || { text: '', enabled: false, updatedAt: null };
+        setSavingHooks(prev => ({ ...prev, [clipIndex]: true }));
+        setError('');
+
+        try {
+            const response = await axios.patch(`${API_URL}/clips/clips/${transcript._id}/${clipIndex}/hook`, {
+                text: hook.text,
+                enabled: hook.enabled
+            });
+            setTranscript(prev => prev ? { ...prev, clips: response.data.clips || prev.clips } : prev);
+            setGeneratedClips(response.data.generatedClips || {});
+        } catch (err: any) {
+            const errorMessage = err.response?.data?.error || 'Failed to save clip hook.';
+            const errorDetails = err.response?.data?.details ? ` (${err.response.data.details})` : '';
+            setError(errorMessage + errorDetails);
+            console.error('Clip hook save error:', err);
+        } finally {
+            setSavingHooks(prev => ({ ...prev, [clipIndex]: false }));
+        }
     };
 
     const deleteClipVersion = async (clipIndex: number, video: ClipVideo) => {
@@ -320,6 +374,41 @@ export default function TranscriptDetailPage() {
                                                 >
                                                     Preview in Player
                                                 </Button>
+                                            </div>
+
+                                            <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+                                                <div className="mb-2 flex items-center justify-between gap-3">
+                                                    <label className="flex items-center gap-2 text-sm font-medium text-slate-900">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={Boolean(clip.hook?.enabled)}
+                                                            onChange={(event) => updateClipHookDraft(index, { enabled: event.target.checked })}
+                                                            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                                        />
+                                                        Hook
+                                                    </label>
+                                                    <Button
+                                                        size="sm"
+                                                        variant="outline"
+                                                        onClick={() => saveClipHook(index)}
+                                                        disabled={savingHooks[index]}
+                                                        className="h-7 px-2 text-xs"
+                                                    >
+                                                        <Save className="mr-1 h-3 w-3" />
+                                                        {savingHooks[index] ? 'Saving...' : 'Save'}
+                                                    </Button>
+                                                </div>
+                                                <textarea
+                                                    value={clip.hook?.text || ''}
+                                                    onChange={(event) => updateClipHookDraft(index, { text: event.target.value })}
+                                                    rows={2}
+                                                    maxLength={120}
+                                                    placeholder="Short top overlay hook"
+                                                    className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm text-slate-900 shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                />
+                                                {clip.hook?.enabled && !clip.hook.text.trim() && (
+                                                    <p className="mt-1 text-xs text-amber-700">Hook is enabled but will be skipped until text is added.</p>
+                                                )}
                                             </div>
 
                                             {/* Generated clip video player */}
@@ -479,6 +568,7 @@ export default function TranscriptDetailPage() {
                     generatedClipUrl={selectedClipForReframe.url}
                     sourceVideoId={selectedClipForReframe.id}
                     clipDefinition={selectedClipForReframe.clipDefinition}
+                    clipHook={selectedClipForReframe.clipHook}
                     clipIndex={selectedClipForReframe.clipIndex}
                     onGenerationComplete={fetchTranscript}
                 />
