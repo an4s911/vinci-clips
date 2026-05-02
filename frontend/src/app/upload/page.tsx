@@ -6,10 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
-import { UploadCloud, Clock, CheckCircle, AlertCircle, Loader2, Link as LinkIcon, Globe, Trash2, Download } from 'lucide-react';
+import { UploadCloud, Clock, CheckCircle, AlertCircle, Loader2, Link as LinkIcon, Globe, Trash2, Download, StopCircle } from 'lucide-react';
 import Link from 'next/link';
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
+
+interface ProcessingJob {
+  status: 'idle' | 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
+  phase: string;
+  progressMessage: string;
+  error?: string | null;
+}
 
 interface Transcript {
   _id: string;
@@ -20,6 +27,7 @@ interface Transcript {
   thumbnailUrl?: string;
   failureReason?: string | null;
   failedAt?: string | null;
+  processingJob?: ProcessingJob | null;
 }
 
 export default function UploadClient() {
@@ -33,6 +41,13 @@ export default function UploadClient() {
   const [importMode, setImportMode] = useState<'file' | 'url'>('file');
   const [isPolling, setIsPolling] = useState(false);
   const [retryingIds, setRetryingIds] = useState<Record<string, boolean>>({});
+  const [cancellingIds, setCancellingIds] = useState<Record<string, boolean>>({});
+
+  const isTranscriptProcessing = (transcript: Transcript) => (
+    transcript.processingJob
+      ? ['queued', 'running', 'cancelling'].includes(transcript.processingJob.status)
+      : Boolean(transcript.status && !['completed', 'failed'].includes(transcript.status))
+  );
 
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
@@ -44,9 +59,7 @@ export default function UploadClient() {
           const transcripts = response.data.slice(0, 6);
           setRecentTranscripts(transcripts);
 
-          const stillProcessing = transcripts.some(transcript => 
-            transcript.status && !['completed', 'failed'].includes(transcript.status)
-          );
+          const stillProcessing = transcripts.some(isTranscriptProcessing);
           
           if (!stillProcessing) {
             setIsPolling(false);
@@ -62,7 +75,7 @@ export default function UploadClient() {
     fetchRecentTranscripts();
 
     if (isPolling) {
-      interval = setInterval(fetchRecentTranscripts, 5000);
+      interval = setInterval(fetchRecentTranscripts, 3000);
     }
 
     return () => {
@@ -86,6 +99,9 @@ export default function UploadClient() {
       case 'transcribing':
         return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
       default:
+        if (status === 'cancelled') {
+          return <StopCircle className="h-4 w-4 text-amber-500" />;
+        }
         return <Clock className="h-4 w-4 text-gray-500" />;
     }
   };
@@ -106,6 +122,14 @@ export default function UploadClient() {
     
     const config = statusConfig[status as keyof typeof statusConfig] || { label: 'Unknown', variant: 'secondary' as const };
     return <Badge variant={config.variant}>{config.label}</Badge>;
+  };
+
+  const formatPhase = (phase?: string) => {
+    if (!phase) return 'Processing';
+    return phase
+      .replace(/^cut-segment-(\d+)$/, 'cutting segment $1')
+      .replace(/-/g, ' ')
+      .replace(/\b\w/g, char => char.toUpperCase());
   };
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -162,8 +186,7 @@ export default function UploadClient() {
           }
         },
       });
-      setMessage('Analysis complete!');
-      console.log(response.data);
+      setMessage(response.data?.message || 'Upload accepted. Processing in background.');
       // Refresh the recent transcripts list and start polling
       const refreshResponse = await axios.get(`${API_URL}/clips/transcripts`);
       setRecentTranscripts(refreshResponse.data.slice(0, 6));
@@ -193,9 +216,8 @@ export default function UploadClient() {
         url: importUrl.trim()
       });
       
-      setMessage('Video imported successfully!');
+      setMessage(response.data?.message || 'Import accepted. Processing in background.');
       setImportUrl('');
-      console.log(response.data);
       
       // Refresh the recent transcripts list and start polling
       const refreshResponse = await axios.get(`${API_URL}/clips/transcripts`);
@@ -208,6 +230,24 @@ export default function UploadClient() {
       setMessage(errorMessage);
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleCancelProcessing = async (id: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    setCancellingIds(prev => ({ ...prev, [id]: true }));
+    try {
+      const response = await axios.post(`${API_URL}/clips/transcripts/${id}/cancel-processing`);
+      if (response.data?.transcript) {
+        setRecentTranscripts(prev => prev.map(t => t._id === id ? response.data.transcript : t));
+      }
+      setIsPolling(true);
+    } catch (error: any) {
+      setMessage(error.response?.data?.error || 'Failed to cancel processing.');
+    } finally {
+      setCancellingIds(prev => ({ ...prev, [id]: false }));
     }
   };
 
@@ -393,21 +433,40 @@ export default function UploadClient() {
                         <p className="text-sm text-muted-foreground">
                           Created: {new Date(transcript.createdAt).toLocaleDateString()}
                         </p>
-                        {transcript.status === 'failed' && transcript.failureReason ? (
+                        {transcript.processingJob && isTranscriptProcessing(transcript) ? (
+                          <div className="rounded-md border bg-muted/50 p-2 text-sm">
+                            <div className="font-medium">{formatPhase(transcript.processingJob.phase)}</div>
+                            <div className="text-muted-foreground">{transcript.processingJob.progressMessage}</div>
+                          </div>
+                        ) : null}
+                        {transcript.processingJob?.status === 'cancelled' ? (
+                          <p className="text-sm text-amber-700">Processing cancelled.</p>
+                        ) : null}
+                        {transcript.status === 'failed' && transcript.processingJob?.status !== 'cancelled' && transcript.failureReason ? (
                           <p className="text-sm text-red-600">
-                            Video import/download succeeded, but transcription failed. You can retry it.
+                            {transcript.failureReason}
                           </p>
                         ) : null}
                         <Button
                           asChild
                           className="w-full"
-                          variant={!transcript.status || ['completed', 'failed'].includes(transcript.status) ? 'default' : 'secondary'}
-                          disabled={Boolean(transcript.status && ['uploading', 'converting', 'transcribing'].includes(transcript.status))}
+                          variant={!isTranscriptProcessing(transcript) ? 'default' : 'secondary'}
                         >
                           <Link href={`/clips/transcripts/${transcript._id}`}>
-                            {!transcript.status || ['completed', 'failed'].includes(transcript.status) ? 'View Details' : 'Processing...'}
+                            {!isTranscriptProcessing(transcript) ? 'View Details' : 'View Progress'}
                           </Link>
                         </Button>
+                        {isTranscriptProcessing(transcript) && (
+                          <Button
+                            onClick={(e) => handleCancelProcessing(transcript._id, e)}
+                            variant="outline"
+                            className="w-full"
+                            disabled={cancellingIds[transcript._id] || transcript.processingJob?.status === 'cancelling'}
+                          >
+                            <StopCircle className="mr-2 h-4 w-4" />
+                            {cancellingIds[transcript._id] || transcript.processingJob?.status === 'cancelling' ? 'Stopping...' : 'Stop Processing'}
+                          </Button>
+                        )}
                         {transcript.status === 'failed' && (
                           <Button
                             onClick={(e) => handleRetryTranscription(transcript._id, e)}

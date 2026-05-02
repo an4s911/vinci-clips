@@ -4,25 +4,21 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleAIFileManager } = require('@google/generative-ai/server');
 const fs = require('fs');
 const path = require('path');
-const logger = require('../utils/logger');
 const { generateJsonContent } = require('../utils/gemini');
+const {
+    TRANSCRIPTION_PROMPT,
+    TRANSCRIPTION_SCHEMA,
+    assertTranscriptNotCancelled,
+    completeTranscriptJob,
+    createJobState,
+    isTranscriptCancelRequested,
+    logVideoProcessing,
+    markTranscriptPhase,
+    resolveLocalUploadPath,
+    startTranscriptWorker,
+} = require('../utils/backgroundJobs');
 
 const router = express.Router();
-const TRANSCRIPTION_PROMPT = "Transcribe the provided audio with word-level timestamps and identify the speaker for each word. Format the output as a JSON array of objects, where each object represents a single word with precise millisecond timing. Each object should have 'start' (in format MM:SS:mmm), 'end' (in format MM:SS:mmm), 'text' (single word), and 'speaker' fields. For example: [{'start': '00:00:000', 'end': '00:00:450', 'text': 'Hello', 'speaker': 'Speaker 1'}, {'start': '00:00:450', 'end': '00:00:890', 'text': 'world', 'speaker': 'Speaker 1'}]";
-const TRANSCRIPTION_SCHEMA = {
-    type: 'ARRAY',
-    items: {
-        type: 'OBJECT',
-        properties: {
-            start: { type: 'STRING' },
-            end: { type: 'STRING' },
-            text: { type: 'STRING' },
-            speaker: { type: 'STRING' },
-        },
-        required: ['start', 'end', 'text', 'speaker'],
-        propertyOrdering: ['start', 'end', 'text', 'speaker'],
-    },
-};
 
 const hasTranscriptContent = (transcript) => Array.isArray(transcript?.transcript) && transcript.transcript.length > 0;
 
@@ -30,25 +26,65 @@ const getUserSafeFailureReason = (error) => {
     if (error?.code === 'TRANSCRIPTION_PARSE_FAILED') {
         return 'Video import/download succeeded, but transcription failed because Gemini returned invalid JSON. Retry transcription to try again.';
     }
-
+    if (error?.code === 'JOB_CANCELLED') {
+        return 'Transcription retry was cancelled.';
+    }
     return 'Video import/download succeeded, but transcription failed while talking to Gemini. Retry transcription to try again.';
 };
 
-const resolveLocalUploadPath = (mediaUrl) => {
-    if (!mediaUrl || typeof mediaUrl !== 'string') {
-        return null;
-    }
+async function runRetryTranscription(transcriptId, mp3Path) {
+    const jobType = 'retry-transcription';
 
-    const normalized = mediaUrl.replace(/^\/+/, '');
-    const candidates = [
-        path.resolve(process.cwd(), normalized),
-        path.resolve(__dirname, '..', '..', normalized),
-    ];
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await markTranscriptPhase(transcriptId, jobType, 'resolve-mp3', 'Resolved saved MP3 for retry.', {
+        mp3FileName: path.basename(mp3Path),
+    });
 
-    return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
-};
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY);
 
-// Retry transcription for a stuck transcript
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await markTranscriptPhase(transcriptId, jobType, 'upload-gemini', 'Uploading saved MP3 to Gemini.', {
+        mp3FileName: path.basename(mp3Path),
+    });
+    const uploadResult = await fileManager.uploadFile(mp3Path, {
+        mimeType: 'audio/mpeg',
+        displayName: path.basename(mp3Path)
+    });
+
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await markTranscriptPhase(transcriptId, jobType, 'transcribe', 'Retrying Gemini transcription.', {
+        mp3FileName: path.basename(mp3Path),
+    });
+    const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
+    const result = await generateJsonContent({
+        genAI,
+        logLabel: `Retry transcription for ${transcriptId}`,
+        contents: [{
+            role: 'user',
+            parts: [
+                { text: TRANSCRIPTION_PROMPT },
+                audioPart,
+            ],
+        }],
+        responseSchema: TRANSCRIPTION_SCHEMA,
+    });
+
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await Transcript.findByIdAndUpdate(transcriptId, {
+        transcript: result.data,
+        failureReason: null,
+        failedAt: null,
+    });
+    logVideoProcessing(transcriptId, 'completed', 'Retry transcription completed', {
+        jobType,
+        phase: 'transcribe',
+        model: result.model,
+        wordCount: Array.isArray(result.data) ? result.data.length : null,
+    });
+    await completeTranscriptJob(transcriptId, jobType, 'Transcription retry completed.');
+}
+
 router.post('/:transcriptId', async (req, res) => {
     const { transcriptId } = req.params;
 
@@ -56,6 +92,10 @@ router.post('/:transcriptId', async (req, res) => {
         const transcript = await Transcript.findById(transcriptId);
         if (!transcript) {
             return res.status(404).json({ error: 'Transcript not found.' });
+        }
+
+        if (transcript.processingJob && ['queued', 'running', 'cancelling'].includes(transcript.processingJob.status)) {
+            return res.status(409).json({ error: 'Transcript processing is already active.' });
         }
 
         if (transcript.status === 'completed') {
@@ -87,78 +127,50 @@ router.post('/:transcriptId', async (req, res) => {
             });
         }
 
-        logger.logVideoProcessing(transcriptId, 'retrying', 'Starting transcription retry');
-
-        await Transcript.findByIdAndUpdate(transcriptId, {
-            status: 'transcribing',
-        });
-
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY);
-
-        console.log('Uploading MP3 to Gemini API...');
-        const uploadResult = await fileManager.uploadFile(mp3Path, {
-            mimeType: 'audio/mpeg',
-            displayName: path.basename(mp3Path)
-        });
-
-        const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
-
-        console.log('Sending transcription request to Gemini...');
-
-        const result = await generateJsonContent({
-            genAI,
-            logLabel: `Retry transcription for ${transcriptId}`,
-            contents: [{
-                role: 'user',
-                parts: [
-                    { text: TRANSCRIPTION_PROMPT },
-                    audioPart,
-                ],
-            }],
-            responseSchema: TRANSCRIPTION_SCHEMA,
-        });
-
-        const transcriptContent = result.data;
-        console.log(`Retry transcription for ${transcriptId} used Gemini model: ${result.model}`);
-        
-        console.log(`Transcription completed with ${transcriptContent.length} segments`);
-
         const updatedTranscript = await Transcript.findByIdAndUpdate(transcriptId, {
-            transcript: transcriptContent,
-            status: 'completed',
+            status: 'transcribing',
+            processingJob: createJobState({
+                status: 'running',
+                phase: 'resolve-mp3',
+                progressMessage: 'Starting transcription retry.',
+            }),
             failureReason: null,
             failedAt: null,
         });
 
-        console.log(`Transcription retry successful for ${transcriptId}`);
-
-        res.status(200).json({
-            message: 'Transcription retry completed successfully',
-            transcript: updatedTranscript,
-            segmentCount: transcriptContent.length
+        logVideoProcessing(transcriptId, 'accepted', 'Transcription retry accepted', {
+            jobType: 'retry-transcription',
+            phase: 'resolve-mp3',
+            mp3FileName: path.basename(mp3Path),
         });
 
+        startTranscriptWorker(transcriptId, 'retry-transcription', async () => {
+            try {
+                await runRetryTranscription(transcriptId, mp3Path);
+            } catch (error) {
+                if (error?.code === 'JOB_CANCELLED' || await isTranscriptCancelRequested(transcriptId)) {
+                    throw error;
+                }
+                await Transcript.findByIdAndUpdate(transcriptId, {
+                    failureReason: getUserSafeFailureReason(error),
+                    failedAt: new Date().toISOString(),
+                });
+                throw error;
+            }
+        });
+
+        res.status(202).json({
+            message: 'Transcription retry accepted. Processing continues in the background.',
+            transcript: updatedTranscript,
+        });
     } catch (error) {
-        console.error(`Transcription retry failed for ${transcriptId}:`, error);
-
-        const failureReason = getUserSafeFailureReason(error);
-        try {
-            await Transcript.findByIdAndUpdate(transcriptId, {
-                status: 'failed',
-                failureReason,
-                failedAt: new Date().toISOString(),
-            });
-        } catch (updateError) {
-            console.error('Failed to update transcript status:', updateError);
-        }
-
-        const isParseFailure = error?.code === 'TRANSCRIPTION_PARSE_FAILED';
-        res.status(isParseFailure ? 422 : 502).json({
-            error: isParseFailure ? 'Transcription parse failed' : 'Gemini transcription failed',
-            details: isParseFailure
-                ? 'Gemini returned invalid or truncated JSON. The saved MP3 is still available, so you can retry transcription again.'
-                : failureReason,
+        logVideoProcessing(transcriptId, 'failed', 'Transcription retry failed before it could start', {
+            jobType: 'retry-transcription',
+            error: error.message,
+        });
+        res.status(500).json({
+            error: 'Failed to retry transcription.',
+            details: error.message,
         });
     }
 });

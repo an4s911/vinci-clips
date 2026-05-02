@@ -4,10 +4,11 @@ import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { useParams, useRouter } from 'next/navigation';
 import ReframeModal from '@/components/ReframeModal';
 import CaptionGenerator from '@/components/CaptionGenerator';
-import { AlertCircle, Download, ExternalLink, Loader2, RefreshCcw, Save, Trash2, Wand2 } from 'lucide-react';
+import { AlertCircle, Download, ExternalLink, Loader2, RefreshCcw, Save, StopCircle, Trash2, Wand2 } from 'lucide-react';
 import StreamerGameplayCrop from '@/components/StreamerGameplayCrop';
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 interface TranscriptSegment {
@@ -37,6 +38,17 @@ interface ClipVideo {
     title?: string;
 }
 
+interface ProcessingJob {
+    status: 'idle' | 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
+    phase: string;
+    progressMessage: string;
+    error?: string | null;
+}
+
+interface ClipGeneration extends ProcessingJob {
+    activeOutputUrl?: string | null;
+}
+
 interface ClipHook {
     text: string;
     enabled: boolean;
@@ -52,6 +64,7 @@ interface Clip {
     hook: ClipHook;
     videos?: ClipVideo[];
     primaryVideoId?: string | null;
+    generation?: ClipGeneration | null;
 }
 
 interface Transcript {
@@ -65,6 +78,7 @@ interface Transcript {
     status?: 'uploading' | 'converting' | 'transcribing' | 'completed' | 'failed';
     failureReason?: string | null;
     failedAt?: string | null;
+    processingJob?: ProcessingJob | null;
     analysisMetadata?: {
         filteredClipCount?: number;
         visibleClipCount?: number;
@@ -88,6 +102,8 @@ export default function TranscriptDetailPage() {
     const [isReframeModalOpen, setIsReframeModalOpen] = useState(false);
     const [selectedClipForReframe, setSelectedClipForReframe] = useState<any>(null);
     const [retryingTranscript, setRetryingTranscript] = useState(false);
+    const [cancellingTranscript, setCancellingTranscript] = useState(false);
+    const [cancellingClips, setCancellingClips] = useState<{[key: number]: boolean}>({});
     const params = useParams();
     const router = useRouter();
     const id = params.id;
@@ -114,6 +130,26 @@ export default function TranscriptDetailPage() {
         }
     }, [id, fetchTranscript]);
 
+    const isTranscriptProcessing = (value: Transcript | null) => (
+        value?.processingJob
+            ? ['queued', 'running', 'cancelling'].includes(value.processingJob.status)
+            : Boolean(value?.status && ['uploading', 'converting', 'transcribing'].includes(value.status))
+    );
+
+    const isClipGenerating = (clip?: Clip) => Boolean(
+        clip?.generation && ['queued', 'running', 'cancelling'].includes(clip.generation.status)
+    );
+
+    const hasActiveJobs = Boolean(isTranscriptProcessing(transcript) || transcript?.clips?.some(isClipGenerating));
+
+    useEffect(() => {
+        if (!id || !hasActiveJobs) return;
+        const interval = setInterval(() => {
+            fetchTranscript().catch(err => console.error('Failed to poll transcript:', err));
+        }, 3000);
+        return () => clearInterval(interval);
+    }, [id, hasActiveJobs, fetchTranscript]);
+
     const generateClips = async () => {
         if (!transcript) return;
         
@@ -136,6 +172,30 @@ export default function TranscriptDetailPage() {
         const mins = Math.floor(seconds / 60);
         const secs = Math.floor(seconds % 60);
         return `${mins}:${secs.toString().padStart(2, '0')}`;
+    };
+
+    const formatPhase = (phase?: string, segmentCount?: number) => {
+        if (!phase) return 'Processing';
+        const segmentMatch = phase.match(/^cut-segment-(\d+)$/);
+        if (segmentMatch) {
+            return segmentCount ? `Cutting segment ${segmentMatch[1]}/${segmentCount}` : `Cutting segment ${segmentMatch[1]}`;
+        }
+        const labels: Record<string, string> = {
+            'extract-metadata': 'Extracting metadata',
+            'download-video': 'Downloading video',
+            'probe-duration': 'Reading duration',
+            'convert-mp3': 'Converting audio',
+            'persist-files': 'Saving files',
+            'upload-gemini': 'Uploading to Gemini',
+            transcribe: 'Transcribing',
+            prepare: 'Preparing',
+            'cut-segment': 'Cutting segment',
+            'stitch-segments': 'Stitching segments',
+            'cleanup-temp': 'Cleaning temporary files',
+            'save-video': 'Saving video',
+            completed: 'Completed',
+        };
+        return labels[phase] || phase.replace(/-/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
     };
 
     const seekToClip = (clip: Clip) => {
@@ -165,6 +225,38 @@ export default function TranscriptDetailPage() {
             console.error('Clip generation error:', err);
         } finally {
             setGeneratingClips(prev => ({...prev, [clipIndex]: false}));
+        }
+    };
+
+    const cancelTranscriptProcessing = async () => {
+        if (!transcript || cancellingTranscript) return;
+        setCancellingTranscript(true);
+        setError('');
+        try {
+            const response = await axios.post(`${API_URL}/clips/transcripts/${transcript._id}/cancel-processing`);
+            if (response.data?.transcript) {
+                setTranscript(response.data.transcript);
+            }
+        } catch (err: any) {
+            setError(err.response?.data?.error || 'Failed to cancel transcript processing.');
+        } finally {
+            setCancellingTranscript(false);
+        }
+    };
+
+    const cancelClipGeneration = async (clipIndex: number) => {
+        if (!transcript) return;
+        setCancellingClips(prev => ({ ...prev, [clipIndex]: true }));
+        setError('');
+        try {
+            const response = await axios.post(`${API_URL}/clips/clips/${transcript._id}/${clipIndex}/cancel-generation`);
+            if (response.data?.transcript) {
+                setTranscript(response.data.transcript);
+            }
+        } catch (err: any) {
+            setError(err.response?.data?.error || 'Failed to cancel clip generation.');
+        } finally {
+            setCancellingClips(prev => ({ ...prev, [clipIndex]: false }));
         }
     };
 
@@ -317,7 +409,7 @@ export default function TranscriptDetailPage() {
     };
 
     const hasTranscriptContent = Array.isArray(transcript?.transcript) && transcript.transcript.length > 0;
-    const isFailedWithoutTranscript = transcript?.status === 'failed' && !hasTranscriptContent;
+    const isFailedWithoutTranscript = transcript?.status === 'failed' && transcript.processingJob?.status !== 'cancelled' && !hasTranscriptContent;
     const canAnalyzeTranscript = hasTranscriptContent;
 
     if (loading) {
@@ -358,6 +450,34 @@ export default function TranscriptDetailPage() {
                                         </Button>
                                     </div>
                                 </div>
+                            </div>
+                        )}
+                        {isTranscriptProcessing(transcript) && transcript.processingJob && (
+                            <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4 text-blue-950">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                        <div className="mb-1 flex items-center gap-2">
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                            <p className="font-semibold">Processing video</p>
+                                            <Badge variant="secondary">{formatPhase(transcript.processingJob.phase)}</Badge>
+                                        </div>
+                                        <p className="text-sm text-blue-800">{transcript.processingJob.progressMessage}</p>
+                                    </div>
+                                    <Button
+                                        onClick={cancelTranscriptProcessing}
+                                        disabled={cancellingTranscript || transcript.processingJob.status === 'cancelling'}
+                                        variant="outline"
+                                        size="sm"
+                                    >
+                                        <StopCircle className="mr-2 h-4 w-4" />
+                                        {cancellingTranscript || transcript.processingJob.status === 'cancelling' ? 'Stopping...' : 'Stop'}
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+                        {transcript.processingJob?.status === 'cancelled' && (
+                            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                                Processing was cancelled.
                             </div>
                         )}
                         {transcript && transcript.videoUrl && (
@@ -403,24 +523,48 @@ export default function TranscriptDetailPage() {
                                 <p className="mt-4 text-muted-foreground">Clip analysis is unavailable until transcript content exists.</p>
                             ) : transcript.clips && transcript.clips.length > 0 ? (
                                 <div className="mt-4 space-y-4">
-                                    {transcript.clips.map((clip, index) => {
-                                        const primaryVideo = generatedClips[index] as ClipVideo | undefined;
-                                        const previousVersions = getPreviousVersions(clip, primaryVideo);
+	                                    {transcript.clips.map((clip, index) => {
+	                                        const primaryVideo = generatedClips[index] as ClipVideo | undefined;
+	                                        const previousVersions = getPreviousVersions(clip, primaryVideo);
+                                            const clipGenerating = isClipGenerating(clip);
 
-                                        return (
-                                        <div key={index} className="p-4 bg-muted rounded-lg transition-colors">
-                                            <div className="flex items-start justify-between mb-2">
-                                                <div className="font-semibold flex-1">{clip.title}</div>
-                                                <Button 
-                                                    onClick={() => generateVideoClip(index)}
-                                                    disabled={generatingClips[index]}
-                                                    size="sm"
-                                                    className="ml-2"
-                                                >
-                                                    {generatingClips[index] ? 'Generating...' : 'Generate Clip'}
-                                                </Button>
-                                            </div>
-                                            <div className="text-sm text-muted-foreground">
+	                                        return (
+	                                        <div key={index} className="p-4 bg-muted rounded-lg transition-colors">
+	                                            <div className="flex items-start justify-between mb-2">
+	                                                <div className="font-semibold flex-1">{clip.title}</div>
+                                                    <div className="ml-2 flex flex-wrap justify-end gap-2">
+                                                        {clipGenerating ? (
+                                                            <Button
+                                                                onClick={() => cancelClipGeneration(index)}
+                                                                disabled={cancellingClips[index] || clip.generation?.status === 'cancelling'}
+                                                                size="sm"
+                                                                variant="outline"
+                                                            >
+                                                                <StopCircle className="mr-2 h-4 w-4" />
+                                                                {cancellingClips[index] || clip.generation?.status === 'cancelling' ? 'Stopping...' : 'Stop'}
+                                                            </Button>
+                                                        ) : null}
+	                                                    <Button
+	                                                        onClick={() => generateVideoClip(index)}
+	                                                        disabled={generatingClips[index] || clipGenerating}
+	                                                        size="sm"
+	                                                    >
+	                                                        {generatingClips[index] || clipGenerating ? 'Generating...' : 'Generate Clip'}
+	                                                    </Button>
+                                                    </div>
+	                                            </div>
+                                                {clip.generation && clip.generation.status !== 'idle' ? (
+                                                    <div className={`mb-3 rounded-md border p-3 text-sm ${clip.generation.status === 'failed' ? 'border-red-200 bg-red-50 text-red-900' : clip.generation.status === 'cancelled' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-blue-200 bg-blue-50 text-blue-950'}`}>
+                                                        <div className="mb-1 flex items-center gap-2 font-medium">
+                                                            {clipGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                                                            <span>{formatPhase(clip.generation.phase, clip.segments?.length)}</span>
+                                                            <Badge variant={clip.generation.status === 'failed' ? 'destructive' : 'secondary'}>{clip.generation.status}</Badge>
+                                                        </div>
+                                                        <p>{clip.generation.progressMessage}</p>
+                                                        {clip.generation.error ? <p className="mt-1 text-xs">{clip.generation.error}</p> : null}
+                                                    </div>
+                                                ) : null}
+	                                            <div className="text-sm text-muted-foreground">
                                                 {clip.segments && clip.segments.length > 0 ? (
                                                     // Multi-segment clip
                                                     <div>

@@ -2,96 +2,53 @@ const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { exec, execFile } = require('child_process');
 const Transcript = require('../models/Transcript');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleAIFileManager } = require('@google/generative-ai/server');
 const { generateJsonContent } = require('../utils/gemini');
+const {
+    TRANSCRIPTION_PROMPT,
+    TRANSCRIPTION_SCHEMA,
+    assertTranscriptNotCancelled,
+    completeTranscriptJob,
+    createJobState,
+    isTranscriptCancelRequested,
+    logVideoProcessing,
+    markTranscriptPhase,
+    runTrackedCommand,
+    runTrackedFile,
+    startTranscriptWorker,
+} = require('../utils/backgroundJobs');
 
 const router = express.Router();
-const execOptions = { maxBuffer: 10 * 1024 * 1024 };
-const TRANSCRIPTION_PROMPT = "Transcribe the provided audio with word-level timestamps and identify the speaker for each word. Format the output as a JSON array of objects, where each object represents a single word with precise millisecond timing. Each object should have 'start' (in format MM:SS:mmm), 'end' (in format MM:SS:mmm), 'text' (single word), and 'speaker' fields. For example: [{'start': '00:00:000', 'end': '00:00:450', 'text': 'Hello', 'speaker': 'Speaker 1'}, {'start': '00:00:450', 'end': '00:00:890', 'text': 'world', 'speaker': 'Speaker 1'}]";
-const TRANSCRIPTION_SCHEMA = {
-    type: 'ARRAY',
-    items: {
-        type: 'OBJECT',
-        properties: {
-            start: { type: 'STRING' },
-            end: { type: 'STRING' },
-            text: { type: 'STRING' },
-            speaker: { type: 'STRING' },
-        },
-        required: ['start', 'end', 'text', 'speaker'],
-        propertyOrdering: ['start', 'end', 'text', 'speaker'],
-    },
-};
+const execOptions = { maxBuffer: 20 * 1024 * 1024 };
 
-const getUserSafeFailureReason = (error) => {
-    if (error?.code === 'TRANSCRIPTION_PARSE_FAILED') {
-        return 'Video import succeeded, but transcription failed because Gemini returned an invalid response. Retry transcription to try again.';
-    }
-
-    return 'Video import succeeded, but transcription failed. Retry transcription to try again.';
-};
-
-// Ensure the imports directory exists
 const importsDir = 'uploads/imports';
+const uploadsDir = 'uploads';
 if (!fs.existsSync(importsDir)) {
     fs.mkdirSync(importsDir, { recursive: true });
 }
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
-const runCommand = (command, options = execOptions) => new Promise((resolve, reject) => {
-    exec(command, options, (error, stdout, stderr) => {
-        if (error) {
-            error.stderr = stderr;
-            reject(error);
-            return;
-        }
-
-        resolve({ stdout, stderr });
-    });
-});
-
-const runCommandFile = (file, args, options = execOptions) => new Promise((resolve, reject) => {
-    execFile(file, args, options, (error, stdout, stderr) => {
-        if (error) {
-            error.stderr = stderr;
-            reject(error);
-            return;
-        }
-
-        resolve({ stdout, stderr });
-    });
-});
-
-const sanitizeFilename = (value) => value
+const sanitizeFilename = (value) => String(value || 'imported-video')
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 180) || 'imported-video';
+    .slice(0, 140) || 'imported-video';
 
-// Platform detection utility
 const detectPlatform = (url) => {
     const hostname = new URL(url).hostname.toLowerCase();
-    
-    if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) {
-        return 'youtube';
-    } else if (hostname.includes('vimeo.com')) {
-        return 'vimeo';
-    } else if (hostname.includes('instagram.com')) {
-        return 'instagram';
-    } else if (hostname.includes('linkedin.com')) {
-        return 'linkedin';
-    } else if (hostname.includes('tiktok.com')) {
-        return 'tiktok';
-    } else if (hostname.includes('facebook.com') || hostname.includes('fb.com')) {
-        return 'facebook';
-    }
-    
+    if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) return 'youtube';
+    if (hostname.includes('vimeo.com')) return 'vimeo';
+    if (hostname.includes('instagram.com')) return 'instagram';
+    if (hostname.includes('linkedin.com')) return 'linkedin';
+    if (hostname.includes('tiktok.com')) return 'tiktok';
+    if (hostname.includes('facebook.com') || hostname.includes('fb.com')) return 'facebook';
     return 'unknown';
 };
 
-// URL validation utility
 const validateUrl = (url) => {
     try {
         const urlObj = new URL(url);
@@ -101,110 +58,203 @@ const validateUrl = (url) => {
     }
 };
 
-// YouTube video extraction
-const extractYouTubeVideo = async (url) => {
-    try {
-        const { stdout } = await runCommandFile('yt-dlp', [
-            '--dump-single-json',
-            '--no-warnings',
-            '--no-playlist',
-            url
-        ]);
-        const videoDetails = JSON.parse(stdout);
-        const thumbnails = Array.isArray(videoDetails.thumbnails) ? videoDetails.thumbnails : [];
-        const bestThumbnail = thumbnails.length ? thumbnails[thumbnails.length - 1].url : null;
-        
-        return {
-            title: sanitizeFilename(videoDetails.title || videoDetails.fulltitle || 'youtube-import'),
-            description: videoDetails.description || '',
-            duration: Number(videoDetails.duration) || 0,
-            thumbnail: bestThumbnail,
-            platform: 'youtube',
-            originalUrl: url,
-            downloadUrl: null,
-            videoId: videoDetails.id
-        };
-    } catch (error) {
-        const stderr = error.stderr ? ` ${error.stderr}` : '';
-        throw new Error(`YouTube extraction failed: ${error.message}${stderr}`.trim());
-    }
-};
+async function extractYouTubeVideo(transcriptId, url) {
+    const { stdout } = await runTrackedFile({
+        transcriptId,
+        jobType: 'import',
+        phase: 'extract-metadata',
+        file: 'yt-dlp',
+        args: ['--dump-single-json', '--no-warnings', '--no-playlist', url],
+        options: execOptions,
+    });
+    const videoDetails = JSON.parse(stdout);
+    const thumbnails = Array.isArray(videoDetails.thumbnails) ? videoDetails.thumbnails : [];
+    const bestThumbnail = thumbnails.length ? thumbnails[thumbnails.length - 1].url : null;
 
-// Vimeo video extraction
-const extractVimeoVideo = async (url) => {
-    try {
-        // Extract video ID from Vimeo URL
-        const vimeoIdMatch = url.match(/vimeo\.com\/(?:.*\/)?(\d+)/);
-        if (!vimeoIdMatch) {
-            throw new Error('Invalid Vimeo URL');
-        }
+    return {
+        title: sanitizeFilename(videoDetails.title || videoDetails.fulltitle || 'youtube-import'),
+        description: videoDetails.description || '',
+        duration: Number(videoDetails.duration) || 0,
+        thumbnail: bestThumbnail,
+        platform: 'youtube',
+        originalUrl: url,
+        videoId: videoDetails.id
+    };
+}
 
-        const videoId = vimeoIdMatch[1];
-        
-        // Use Vimeo oEmbed API to get video info
-        const response = await axios.get(`https://vimeo.com/api/oembed.json?url=${encodeURIComponent(url)}`);
-        const videoData = response.data;
+async function extractVimeoVideo(url) {
+    const response = await axios.get(`https://vimeo.com/api/oembed.json?url=${encodeURIComponent(url)}`);
+    const videoData = response.data;
+    const vimeoIdMatch = url.match(/vimeo\.com\/(?:.*\/)?(\d+)/);
 
-        return {
-            title: videoData.title,
-            description: videoData.description || '',
-            duration: videoData.duration || 0,
-            thumbnail: videoData.thumbnail_url,
-            platform: 'vimeo',
-            originalUrl: url,
-            videoId: videoId,
-            // Note: Vimeo requires authentication for direct video download
-            // This is a placeholder - in production, you'd need proper API access
-            downloadUrl: null
-        };
-    } catch (error) {
-        throw new Error(`Vimeo extraction failed: ${error.message}`);
-    }
-};
+    return {
+        title: sanitizeFilename(videoData.title || 'vimeo-import'),
+        description: videoData.description || '',
+        duration: videoData.duration || 0,
+        thumbnail: videoData.thumbnail_url,
+        platform: 'vimeo',
+        originalUrl: url,
+        videoId: vimeoIdMatch?.[1] || null
+    };
+}
 
-// YouTube-specific download using yt-dlp
-const downloadYouTubeVideo = async (url, outputPath) => {
-    try {
-        await runCommandFile('yt-dlp', [
+async function downloadYouTubeVideo(transcriptId, url, outputPath) {
+    await runTrackedFile({
+        transcriptId,
+        jobType: 'import',
+        phase: 'download-video',
+        file: 'yt-dlp',
+        args: [
             '--no-playlist',
             '--format', 'bv*+ba/b',
             '--merge-output-format', 'mp4',
             '--output', outputPath,
             url
-        ], {
-            ...execOptions,
-            maxBuffer: 20 * 1024 * 1024
-        });
-        console.log('YouTube download completed:', outputPath);
-    } catch (error) {
-        const stderr = error.stderr ? ` ${error.stderr}` : '';
-        throw new Error(`YouTube download failed: ${error.message}${stderr}`.trim());
-    }
-};
+        ],
+        options: execOptions,
+    });
+}
 
-// Generic video download utility (for other platforms)
-const downloadVideo = async (downloadUrl, outputPath) => {
+function userSafeFailureReason(error) {
+    if (error?.code === 'TRANSCRIPTION_PARSE_FAILED') {
+        return 'Video import/download succeeded, but transcription failed because Gemini returned invalid JSON. Retry transcription to try again.';
+    }
+    if (error?.code === 'JOB_CANCELLED') {
+        return 'Import was cancelled.';
+    }
+    return 'Video import/download succeeded, but transcription failed. Retry transcription to try again.';
+}
+
+async function processUrlImport({ transcriptId, url, platform }) {
+    const jobType = 'import';
+    let videoPath = path.join(importsDir, `${transcriptId}.mp4`);
+    let mp3Path = `${videoPath}.mp3`;
+    let thumbnailPath = `${videoPath}_thumbnail.jpg`;
+    let hasSavedMediaArtifacts = false;
+
+    logVideoProcessing(transcriptId, 'running', 'Background URL import job started', { jobType, phase: 'extract-metadata', url, platform });
+
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await markTranscriptPhase(transcriptId, jobType, 'extract-metadata', 'Extracting video metadata.', { url, platform });
+    let videoInfo;
+    if (platform === 'youtube') {
+        videoInfo = await extractYouTubeVideo(transcriptId, url);
+    } else if (platform === 'vimeo') {
+        videoInfo = await extractVimeoVideo(url);
+        throw new Error('Direct download is not supported for Vimeo imports yet.');
+    } else {
+        throw new Error(`Platform ${platform} is not implemented.`);
+    }
+
+    const originalFilename = `${videoInfo.title}-${transcriptId}.mp4`;
+    await Transcript.findByIdAndUpdate(transcriptId, {
+        originalFilename,
+        duration: videoInfo.duration,
+        platform,
+        externalVideoId: videoInfo.videoId,
+    });
+
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await markTranscriptPhase(transcriptId, jobType, 'download-video', 'Downloading source video.', { url, platform });
+    await downloadYouTubeVideo(transcriptId, url, videoPath);
+
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await markTranscriptPhase(transcriptId, jobType, 'convert-mp3', 'Converting video audio to MP3.', { fileName: originalFilename });
+    await runTrackedCommand({
+        transcriptId,
+        jobType,
+        phase: 'convert-mp3',
+        command: `ffmpeg -y -i "${videoPath}" -vn -acodec libmp3lame -q:a 2 "${mp3Path}"`,
+        options: execOptions,
+    });
+
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await markTranscriptPhase(transcriptId, jobType, 'thumbnail', 'Generating thumbnail.', { fileName: originalFilename });
     try {
-        const response = await axios({
-            method: 'GET',
-            url: downloadUrl,
-            responseType: 'stream',
-            timeout: 300000 // 5 minutes timeout
+        await runTrackedCommand({
+            transcriptId,
+            jobType,
+            phase: 'thumbnail',
+            command: `ffmpeg -y -i "${videoPath}" -ss 00:00:01 -vframes 1 "${thumbnailPath}"`,
+            options: execOptions,
         });
-
-        const writer = fs.createWriteStream(outputPath);
-        response.data.pipe(writer);
-
-        return new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
-            writer.on('error', reject);
+    } catch (thumbnailError) {
+        logVideoProcessing(transcriptId, 'warning', 'Thumbnail generation failed; continuing without thumbnail', {
+            jobType,
+            phase: 'thumbnail',
+            error: thumbnailError.message,
         });
-    } catch (error) {
-        throw new Error(`Video download failed: ${error.message}`);
     }
-};
 
-// Main URL import endpoint
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await markTranscriptPhase(transcriptId, jobType, 'persist-files', 'Saving imported media files.', { fileName: originalFilename });
+    const mp3FileName = originalFilename.replace(/\.[^/.]+$/, '') + '.mp3';
+    const thumbnailFileName = originalFilename.replace(/\.[^/.]+$/, '') + '_thumbnail.jpg';
+    const videoDestPath = path.join(uploadsDir, originalFilename);
+    const mp3DestPath = path.join(uploadsDir, mp3FileName);
+    const thumbnailDestPath = path.join(uploadsDir, thumbnailFileName);
+
+    fs.renameSync(videoPath, videoDestPath);
+    fs.renameSync(mp3Path, mp3DestPath);
+    if (fs.existsSync(thumbnailPath)) {
+        fs.renameSync(thumbnailPath, thumbnailDestPath);
+    }
+
+    const videoUrl = `/uploads/${originalFilename}`;
+    const mp3Url = `/uploads/${mp3FileName}`;
+    const thumbnailUrl = fs.existsSync(thumbnailDestPath) ? `/uploads/${thumbnailFileName}` : null;
+    await Transcript.findByIdAndUpdate(transcriptId, {
+        videoUrl,
+        mp3Url,
+        thumbnailUrl,
+        duration: videoInfo.duration,
+        failureReason: null,
+        failedAt: null,
+    });
+    hasSavedMediaArtifacts = true;
+
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await markTranscriptPhase(transcriptId, jobType, 'upload-gemini', 'Uploading audio to Gemini.', { mp3FileName });
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY);
+    const uploadResult = await fileManager.uploadFile(mp3DestPath, {
+        mimeType: 'audio/mpeg',
+        displayName: mp3FileName
+    });
+
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await markTranscriptPhase(transcriptId, jobType, 'transcribe', 'Transcribing imported audio with Gemini.', { mp3FileName });
+    const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
+    const { data: transcriptContent, model: resolvedModel } = await generateJsonContent({
+        genAI,
+        logLabel: `URL import transcription for ${transcriptId}`,
+        contents: [{
+            role: 'user',
+            parts: [
+                { text: TRANSCRIPTION_PROMPT },
+                audioPart,
+            ],
+        }],
+        responseSchema: TRANSCRIPTION_SCHEMA,
+    });
+
+    await assertTranscriptNotCancelled(transcriptId, jobType);
+    await Transcript.findByIdAndUpdate(transcriptId, {
+        transcript: transcriptContent,
+        failureReason: null,
+        failedAt: null,
+    });
+    logVideoProcessing(transcriptId, 'completed', 'Gemini transcription completed', {
+        jobType,
+        phase: 'transcribe',
+        model: resolvedModel,
+        wordCount: Array.isArray(transcriptContent) ? transcriptContent.length : null,
+    });
+    await completeTranscriptJob(transcriptId, jobType, 'Import and transcription completed.');
+
+    return { hasSavedMediaArtifacts };
+}
+
 router.post('/url', async (req, res) => {
     const { url } = req.body;
 
@@ -217,199 +267,52 @@ router.post('/url', async (req, res) => {
     }
 
     const platform = detectPlatform(url);
-    
     if (platform === 'unknown') {
         return res.status(400).json({ error: 'Unsupported platform' });
     }
 
-    try {
-        let videoInfo;
-        
-        // Extract video information based on platform
-        switch (platform) {
-            case 'youtube':
-                videoInfo = await extractYouTubeVideo(url);
-                break;
-            case 'vimeo':
-                videoInfo = await extractVimeoVideo(url);
-                break;
-            default:
-                return res.status(400).json({ 
-                    error: `Platform ${platform} not yet implemented` 
-                });
-        }
+    const transcript = await Transcript.create({
+        originalFilename: 'Importing video...',
+        transcript: [],
+        status: 'uploading',
+        failureReason: null,
+        failedAt: null,
+        importUrl: url,
+        platform,
+        processingJob: createJobState({
+            status: 'running',
+            phase: 'extract-metadata',
+            progressMessage: 'Extracting video metadata.',
+        }),
+    });
 
-        // Create initial transcript record
-        let transcript = await Transcript.create({
-            originalFilename: `${videoInfo.title}.mp4`,
-            transcript: [],
-            status: 'uploading',
-            failureReason: null,
-            failedAt: null,
-            importUrl: url,
-            platform: platform,
-            externalVideoId: videoInfo.videoId
-        });
-        
-        console.log(`Created transcript record ${transcript._id} for ${platform} import`);
+    logVideoProcessing(transcript._id, 'accepted', 'URL import request accepted', {
+        jobType: 'import',
+        phase: 'extract-metadata',
+        url,
+        platform,
+    });
 
-        // For YouTube, we can download directly
-        if (platform === 'youtube') {
-            // Download video using ytdl stream to ensure audio+video
-            const videoPath = path.join(importsDir, `${transcript._id}.mp4`);
-            let hasSavedMediaArtifacts = false;
-            
-            try {
-                // Download the video using ytdl stream instead of URL
-                await downloadYouTubeVideo(url, videoPath);
-                
-                // Update status to converting
-                await Transcript.findByIdAndUpdate(transcript._id, { status: 'converting' });
-                
-                // Process similar to regular upload
-                const mp3Path = `${videoPath}.mp3`;
-                const thumbnailPath = `${videoPath}_thumbnail.jpg`;
-                
-                // Convert to MP3
-                const ffmpegCmd = `ffmpeg -i "${videoPath}" -vn -acodec libmp3lame -q:a 2 "${mp3Path}"`;
-                
-                await new Promise((resolve, reject) => {
-                    exec(ffmpegCmd, execOptions, (error) => {
-                        if (error) reject(error);
-                        else resolve();
-                    });
-                });
-                
-                // Generate thumbnail
-                const thumbnailCmd = `ffmpeg -i "${videoPath}" -ss 00:00:01 -vframes 1 "${thumbnailPath}"`;
-                
-                try {
-                    await new Promise((resolve, reject) => {
-                            exec(thumbnailCmd, execOptions, (error) => {
-                                if (error) reject(error);
-                                else resolve();
-                            });
-                    });
-                } catch (thumbnailError) {
-                    console.warn('Thumbnail generation failed:', thumbnailError);
-                }
-                
-                const videoFileName = transcript.originalFilename;
-                const mp3FileName = videoFileName.replace(/\.[^/.]+$/, "") + ".mp3";
-                const thumbnailFileName = videoFileName.replace(/\.[^/.]+$/, "") + "_thumbnail.jpg";
-
-                const videoDestPath = path.join('uploads', videoFileName);
-                const mp3DestPath = path.join('uploads', mp3FileName);
-                const thumbnailDestPath = path.join('uploads', thumbnailFileName);
-
-                // Ensure storage directories exist
-                fs.mkdirSync(path.dirname(videoDestPath), { recursive: true });
-
-                fs.renameSync(videoPath, videoDestPath);
-                fs.renameSync(mp3Path, mp3DestPath);
-                if (fs.existsSync(thumbnailPath)) {
-                    fs.renameSync(thumbnailPath, thumbnailDestPath);
-                }
-
-                const videoUrl = `/uploads/${videoFileName}`;
-                const mp3Url = `/uploads/${mp3FileName}`;
-                const thumbnailUrl = fs.existsSync(thumbnailDestPath) ? `/uploads/${thumbnailFileName}` : null;
-                
-                // Update transcript with URLs and mark as ready for transcription
-                await Transcript.findByIdAndUpdate(transcript._id, {
-                    videoUrl: videoUrl,
-                    mp3Url: mp3Url,
-                    thumbnailUrl: thumbnailUrl,
-                    duration: videoInfo.duration,
-                    status: 'transcribing',
-                    failureReason: null,
-                    failedAt: null,
-                });
-                hasSavedMediaArtifacts = true;
-                
-                // Start transcription
-                const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-                const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY);
-
-                const uploadResult = await fileManager.uploadFile(mp3DestPath, {
-                    mimeType: 'audio/mpeg',
-                    displayName: mp3FileName
-                });
-
-                const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
-
-                const { data: transcriptContent, model: resolvedModel } = await generateJsonContent({
-                    genAI,
-                    logLabel: `YouTube transcription for ${transcript._id}`,
-                    contents: [{
-                        role: 'user',
-                        parts: [
-                            { text: TRANSCRIPTION_PROMPT },
-                            audioPart,
-                        ],
-                    }],
-                    responseSchema: TRANSCRIPTION_SCHEMA,
-                });
-                console.log(`Transcription for ${transcript._id} used Gemini model: ${resolvedModel}`);
-
-                // Update transcript with transcription and mark as completed
-                const finalTranscript = await Transcript.findByIdAndUpdate(transcript._id, {
-                    transcript: transcriptContent,
-                    status: 'completed',
-                    failureReason: null,
-                    failedAt: null,
-                }, { new: true });
-
-                console.log(`Transcript ${transcript._id} for imported video completed successfully`);
-                
-                res.status(200).json({
-                    message: 'Video imported and transcribed successfully',
-                    transcript: finalTranscript,
-                    videoInfo: videoInfo
-                });
-                
-            } catch (downloadError) {
-                console.error('Download or transcription error:', downloadError);
-                if (hasSavedMediaArtifacts) {
-                    const failureReason = getUserSafeFailureReason(downloadError);
-                    await Transcript.findByIdAndUpdate(transcript._id, {
-                        status: 'failed',
-                        failureReason,
-                        failedAt: new Date().toISOString(),
-                    });
-                    return res.status(500).json({
-                        error: 'Video import completed, but transcription failed',
-                        details: failureReason,
-                    });
-                }
-
-                await Transcript.findByIdAndUpdate(transcript._id, {
-                    status: 'failed',
-                    failureReason: 'Video import failed before transcription could start.',
-                    failedAt: new Date().toISOString(),
-                });
-                return res.status(500).json({
-                    error: 'Failed to download or prepare video for transcription',
-                    details: downloadError.message,
-                });
+    startTranscriptWorker(transcript._id, 'import', async () => {
+        try {
+            await processUrlImport({ transcriptId: transcript._id, url, platform });
+        } catch (error) {
+            if (error?.code === 'JOB_CANCELLED' || await isTranscriptCancelRequested(transcript._id)) {
+                throw error;
             }
-        } else {
-            // For platforms that don't support direct download, return info only
-            res.status(200).json({
-                message: 'Video information extracted successfully',
-                transcript: transcript,
-                videoInfo: videoInfo,
-                note: 'Direct download not supported for this platform'
+            const current = await Transcript.findById(transcript._id);
+            await Transcript.findByIdAndUpdate(transcript._id, {
+                failureReason: current?.mp3Url ? userSafeFailureReason(error) : (error?.message || 'Video import failed before transcription could start.'),
+                failedAt: new Date().toISOString(),
             });
+            throw error;
         }
-        
-    } catch (error) {
-        console.error('URL import error:', error);
-        res.status(500).json({ 
-            error: 'Failed to import video',
-            details: error.message 
-        });
-    }
+    });
+
+    res.status(202).json({
+        message: 'Import accepted. Processing continues in the background.',
+        transcript,
+    });
 });
 
 module.exports = router;

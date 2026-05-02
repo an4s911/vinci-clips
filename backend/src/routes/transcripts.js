@@ -5,6 +5,7 @@ const {
     buildGeneratedClipsMap,
     normalizeTranscriptClips
 } = require('../utils/clipVideos');
+const { requestTranscriptCancel } = require('../utils/backgroundJobs');
 
 const router = express.Router();
 
@@ -63,6 +64,30 @@ router.put('/:id', async (req, res) => {
         res.status(200).json(transcript);
     } catch (error) {
         res.status(500).send({ message: error.message });
+    }
+});
+
+router.post('/:id/cancel-processing', async (req, res) => {
+    try {
+        const transcript = await Transcript.findById(req.params.id);
+        if (!transcript) {
+            return res.status(404).json({ error: 'Transcript not found.' });
+        }
+
+        if (!transcript.processingJob || !['queued', 'running', 'cancelling'].includes(transcript.processingJob.status)) {
+            return res.status(409).json({ error: 'Transcript processing is not active.' });
+        }
+
+        const updatedTranscript = await requestTranscriptCancel(req.params.id);
+        res.status(200).json({
+            message: 'Cancellation requested.',
+            transcript: updatedTranscript,
+        });
+    } catch (error) {
+        res.status(500).json({
+            error: 'Failed to cancel transcript processing.',
+            details: error.message,
+        });
     }
 });
 
