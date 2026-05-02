@@ -22,8 +22,8 @@ docker-compose up -d
 graph TB
     A[Load Balancer] --> B[Frontend - Next.js]
     A --> C[Backend - Express API]
-    C --> D[MongoDB Atlas]
-    C --> E[Google Cloud Storage]
+    C --> D[LocalDB]
+    C --> E[Local Media Storage]
     C --> F[Redis Queue]
     C --> G[Gemini AI API]
     H[CDN] --> E
@@ -87,13 +87,6 @@ cp backend/.env.example backend/.env
 # Server
 PORT=8080
 NODE_ENV=production
-
-# Database (use MongoDB Atlas for production)
-DB_URL=mongodb+srv://user:pass@cluster.mongodb.net/vinci-clips-prod
-
-# Google Cloud (production bucket)
-GCP_BUCKET_NAME=vinci-clips-prod
-GCP_SERVICE_ACCOUNT_PATH=./src/service-account-prod.json
 
 # AI Services
 GEMINI_API_KEY=your-production-gemini-key
@@ -270,10 +263,6 @@ services:
   envs:
   - key: NODE_ENV
     value: production
-  - key: DB_URL
-    value: your-mongodb-url
-    type: SECRET
-  
 - name: frontend
   source_dir: frontend
   github:
@@ -409,18 +398,16 @@ module.exports = router;
 
 ## 🚑 Backup Strategy
 
-### Database Backups
+### Data Backups
 ```bash
-# MongoDB Atlas automatic backups (recommended)
-# Or manual backup:
-mongodump --uri="mongodb+srv://user:pass@cluster.mongodb.net/vinci-clips-prod" --out ./backup/$(date +%Y%m%d)
+# Back up local app data
+tar -czf data-backup-$(date +%Y%m%d).tar.gz backend/storage
 ```
 
 ### File Backups
 ```bash
-# Google Cloud Storage versioning (enable in console)
-# Or manual sync:
-gsutil -m rsync -r -d gs://vinci-clips-prod gs://vinci-clips-backup
+# Back up local media directories from the deployment host
+tar -czf media-backup-$(date +%Y%m%d).tar.gz backend/uploads backend/storage
 ```
 
 ### Code Backups
@@ -470,10 +457,10 @@ pm2 status
 pm2 restart all
 ```
 
-**Database connection issues:**
+**Data persistence issues:**
 ```bash
-# Check connectivity
-mongo "mongodb+srv://cluster.mongodb.net/test" --username user
+# Check local data directory permissions
+ls -ld backend/storage
 
 # Check logs
 pm2 logs vinci-backend --lines 100
@@ -484,8 +471,8 @@ pm2 logs vinci-backend --lines 100
 # Check disk space
 df -h
 
-# Check GCS permissions
-gsutil ls gs://your-bucket
+# Check local media directory permissions
+ls -ld backend/uploads backend/storage backend/temp backend/cache
 ```
 
 ### Emergency Procedures

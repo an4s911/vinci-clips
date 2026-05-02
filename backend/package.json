@@ -25,7 +25,6 @@
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
     "@google-cloud/functions": "^4.0.0",
-    "@google-cloud/storage": "^7.16.0",
     "@google/generative-ai": "^0.24.1",
     "archiver": "^7.0.1",
     "axios": "^1.10.0",

@@ -27,9 +27,8 @@ cp .env.example .env
 ```
 
 **Key characteristics**:
-- Database URL points to Docker container: `mongodb://admin:password123@mongodb:27017/vinci-clips`
 - Redis host points to Docker container: `redis`
-- Service account path relative to project root: `./backend/gcp-service-account.json`
+- Redis requires `REDIS_PASSWORD`
 
 ### 2. Backend Folder: `backend/.env` (Local Development)
 
@@ -44,9 +43,7 @@ cp .env.example .env
 ```
 
 **Key characteristics**:
-- Database URL points to local MongoDB: `mongodb://localhost:27017/vinci-clips`
 - Redis host points to localhost: `localhost`
-- Service account path relative to backend folder: `./gcp-service-account.json`
 
 ## Setup Instructions
 
@@ -58,25 +55,15 @@ cp .env.example .env
    # Edit .env with your actual values
    ```
 
-2. **Place GCP service account file**:
+2. **Start with Docker Compose**:
    ```bash
-   # Put your service account JSON in the backend folder
-   cp /path/to/your/service-account.json backend/gcp-service-account.json
-   ```
-
-3. **Start with Docker Compose**:
-   ```bash
-   docker-compose up --build
+   docker compose up --build
    ```
 
 ### Option 2: Local Development (Manual Setup)
 
 1. **Set up local services**:
    ```bash
-   # Install and start MongoDB locally
-   brew install mongodb-community
-   brew services start mongodb-community
-   
    # Install and start Redis (optional)
    brew install redis
    brew services start redis
@@ -89,13 +76,7 @@ cp .env.example .env
    # Edit backend/.env with your actual values
    ```
 
-3. **Place GCP service account file**:
-   ```bash
-   # Put your service account JSON in the backend folder
-   cp /path/to/your/service-account.json backend/gcp-service-account.json
-   ```
-
-4. **Start services manually**:
+3. **Start services manually**:
    ```bash
    # Terminal 1: Start backend
    cd backend && npm run dev
@@ -111,9 +92,9 @@ cp .env.example .env
 | Variable | Docker Value | Local Value | Description |
 |----------|--------------|-------------|-------------|
 | `PORT` | `8080` | `8080` | Backend server port |
-| `DB_URL` | `mongodb://admin:password123@mongodb:27017/vinci-clips` | `mongodb://localhost:27017/vinci-clips` | MongoDB connection |
 | `REDIS_HOST` | `redis` | `localhost` | Redis server host |
-| `GCP_SERVICE_ACCOUNT_PATH` | `./backend/gcp-service-account.json` | `./gcp-service-account.json` | Service account file path |
+| `REDIS_PORT` | `6379` | `6379` | Redis server port |
+| `REDIS_PASSWORD` | from `.env` | from `backend/.env` | Redis password |
 
 ### Required External Services
 
@@ -121,7 +102,6 @@ These values are the same for both Docker and local development:
 
 | Variable | Description | How to get |
 |----------|-------------|------------|
-| `GCP_BUCKET_NAME` | Google Cloud Storage bucket | Create in GCP Console |
 | `GEMINI_API_KEY` | Google Gemini API key | Get from Google AI Studio |
 
 ## Common Issues
@@ -134,30 +114,20 @@ These values are the same for both Docker and local development:
 - Docker: Use project root `.env`
 - Local: Use `backend/.env`
 
-### 2. Service Account Path Issues
+### 2. Redis Connection Issues
 
-**Symptom**: "Service account file not found"
-
-**Solutions**:
-```bash
-# For Docker deployment
-ls -la backend/gcp-service-account.json
-
-# For local development  
-cd backend && ls -la gcp-service-account.json
-```
-
-### 3. Database Connection Issues
-
-**Symptom**: "MongoDB connection failed"
+**Symptom**: Redis authentication or connection errors
 
 **Solutions**:
 ```bash
-# Docker: Check if MongoDB container is running
-docker-compose ps mongodb
+# Docker: Check if Redis container is running
+docker compose ps redis
 
-# Local: Check if MongoDB is installed and running
-brew services list | grep mongodb
+# Docker: Verify password auth
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" ping
+
+# Local: Check if Redis is installed and running
+brew services list | grep redis
 ```
 
 ## Verification
@@ -165,7 +135,7 @@ brew services list | grep mongodb
 ### Docker Deployment
 ```bash
 # Check all services are running
-docker-compose ps
+docker compose ps
 
 # Test backend connection
 curl http://localhost:8080/health
@@ -182,26 +152,23 @@ curl http://localhost:8080/health
 # Test frontend connection  
 curl http://localhost:3000
 
-# Test database connection
-mongosh vinci-clips --eval "db.stats()"
+# Test Redis connection
+redis-cli -a "$REDIS_PASSWORD" ping
 ```
 
 ## Migration Guide
 
 ### From Local to Docker
 1. Copy your `backend/.env` values to project root `.env`
-2. Update database and Redis hosts to use container names
-3. Ensure service account file is in `backend/` folder
+2. Update Redis host to use the container name
 
 ### From Docker to Local
 1. Copy your project root `.env` values to `backend/.env`
-2. Update database and Redis hosts to use localhost
-3. Install MongoDB and Redis locally
-4. Ensure service account file path is relative to backend folder
+2. Update Redis host to use localhost
+3. Install Redis locally
 
 ## Security Notes
 
 - Never commit `.env` files to version control
-- Keep service account JSON files secure and outside of version control
-- Use strong passwords for production MongoDB instances
+- Use strong passwords for production Redis instances
 - Rotate API keys regularly in production environments

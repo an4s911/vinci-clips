@@ -8,20 +8,20 @@ The application is built with a modern, full-stack architecture:
 
 -   **Frontend:** A Next.js application built with React, TypeScript, and Tailwind CSS.
 -   **Backend:** A Node.js server built with Express with modular route handlers.
--   **Database:** MongoDB with Mongoose ODM for data persistence.
+-   **Database:** Local JSON-backed persistence for current development.
 -   **AI Services:** Google's Gemini API for transcription and analysis, with additional AI services for content generation.
--   **Cloud Storage:** Google Cloud Storage for video, audio, and generated content storage.
+-   **Media Storage:** Local filesystem storage for video, audio, and generated content. Cloudflare R2 support is planned.
 -   **Video Processing:** FFmpeg for video manipulation, conversion, and enhancement.
 
 ## 2.1. Core Workflow
 
 1.  **Input:** Users can upload video files (up to 2GB) or import videos via URLs from YouTube, Instagram, LinkedIn, Vimeo, etc.
 2.  **Processing:** The backend converts videos to MP3 and generates thumbnails using FFmpeg.
-3.  **Cloud Storage:** Videos, audio files, and thumbnails are uploaded to Google Cloud Storage in parallel.
+3.  **Media Storage:** Videos, audio files, and thumbnails are stored locally under backend media directories.
 4.  **Transcription:** The Gemini API transcribes audio with speaker diarization and timestamp accuracy.
 5.  **Analysis:** AI analyzes transcripts to suggest 3-5 optimal clips with single or multi-segment options.
 6.  **Enhancement:** Advanced features include auto-reframing, AI B-roll generation, and captioning.
-7.  **Database:** All data including status tracking, clips, and metadata is stored in MongoDB.
+7.  **Database:** All data including status tracking, clips, and metadata is stored by the local persistence layer.
 8.  **Publishing:** Generated clips can be scheduled and posted directly to social media platforms.
 
 ## 2.2. Video Input Sources

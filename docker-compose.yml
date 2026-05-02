@@ -1,32 +1,25 @@
 services:
-  # MongoDB database
-  mongodb:
-    image: mongo:7.0
-    container_name: vinci-clips-mongodb
-    restart: unless-stopped
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: password123
-      MONGO_INITDB_DATABASE: vinci-clips
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongodb_data:/data/db
-      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
-    networks:
-      - vinci-network
-
   # Redis for caching (optional, for future use)
   redis:
     image: redis:7-alpine
     container_name: vinci-clips-redis
     restart: unless-stopped
+    command: |
+      sh -c 'redis-server \
+        --appendonly yes \
+        --requirepass "$${REDIS_PASSWORD}" \
+        --maxmemory 512mb \
+        --maxmemory-policy noeviction'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-devredispassword}
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     networks:
       - vinci-network
+    mem_limit: 768m
+    cpus: "0.5"
 
   # Backend API service
   backend:
@@ -41,18 +34,14 @@ services:
       PORT: 8080
       NODE_ENV: development
       
-      # Database
-      DB_URL: mongodb://admin:password123@mongodb:27017/vinci-clips?authSource=admin
-      
-      # Google Cloud (you need to provide these)
-      GCP_BUCKET_NAME: ${GCP_BUCKET_NAME}
-      GCP_SERVICE_ACCOUNT_PATH: /app/gcp-service-account.json
+      # Gemini
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       LLM_MODEL: ${LLM_MODEL}
       
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-devredispassword}
       CHOKIDAR_USEPOLLING: "true"
     ports:
       - "8080:8080"
@@ -64,9 +53,7 @@ services:
       - ./backend/temp:/app/temp
       - ./backend/cache:/app/cache
       - ./backend/logs:/app/logs
-      - ${GCP_SERVICE_ACCOUNT_PATH:-./backend/gcp-service-account.json}:/app/gcp-service-account.json:ro
     depends_on:
-      - mongodb
       - redis
     networks:
       - vinci-network
@@ -99,8 +86,6 @@ networks:
     driver: bridge
 
 volumes:
-  mongodb_data:
-    driver: local
   redis_data:
     driver: local
   backend_node_modules:

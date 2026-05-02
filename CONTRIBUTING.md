@@ -194,7 +194,7 @@ Brief description of changes and motivation.
 - **Performance:** Optimize renders and API calls
 
 ### Database
-- **Schema design:** Use Mongoose schemas with proper validation
+- **Schema design:** Keep local persistence models validated at the route/model boundary
 - **Indexing:** Add database indexes for query performance
 - **Data consistency:** Ensure data integrity across operations
 

@@ -9,9 +9,9 @@ Vinci Clips is an AI-powered video clipping tool that automatically generates sh
 **Architecture:**
 - **Frontend:** Next.js application with React, TypeScript, and Tailwind CSS
 - **Backend:** Node.js/Express REST API server
-- **Database:** MongoDB with Mongoose ODM
+- **Database:** Local JSON-backed persistence through `src/localdb.js`
 - **AI Services:** Google Gemini API for transcription and analysis
-- **Cloud Storage:** Google Cloud Storage for video/audio files
+- **Media Storage:** Local filesystem storage for video/audio files; Cloudflare R2 support is planned
 - **Video Processing:** FFmpeg for video-to-audio conversion and caption burning
 
 ## Development Commands
@@ -62,16 +62,16 @@ npm run lint
 
 ### Backend Structure
 - **Entry point:** `src/index.js` - Express server setup with CORS and route mounting
-- **Database:** `src/db.js` - MongoDB connection using Mongoose
+- **Database:** `src/localdb.js` - Local JSON-backed persistence with a Mongoose-like API
 - **Routes:** `src/routes/` - Modular route handlers mounted under `/clips` prefix
   - `upload.js` - File upload and processing
   - `transcripts.js` - Transcript CRUD operations
   - `analyze.js` - AI analysis endpoints
   - `clips.js` - Clip management
   - `captions.js` - Caption generation and style management (planned)
-- **Models:** `src/models/` - Mongoose schemas (e.g., `Transcript.js`)
+- **Models:** `src/models/` - Local persistence models (e.g., `Transcript.js`)
 - **File Processing:** Uses `fluent-ffmpeg` for video-to-MP3 conversion and caption burning
-- **Cloud Integration:** Google Cloud Storage and Gemini API integration
+- **AI Integration:** Gemini API integration
 
 ### Frontend Structure
 - **App Router:** Uses Next.js 13+ app directory structure
@@ -86,9 +86,9 @@ npm run lint
 ### Core Workflow
 1. User uploads video via drag-and-drop interface
 2. Backend converts video to MP3 using FFmpeg
-3. Files uploaded to Google Cloud Storage in parallel
+3. Media files are saved under local backend media directories
 4. Gemini API transcribes audio with word-level timestamps and speaker diarization
-5. Transcript data saved to MongoDB with precise timing
+5. Transcript data saved through the local persistence layer with precise timing
 6. Frontend displays transcript with video playback
 7. **Caption Generation:** FFmpeg burns styled captions into video clips for social media
 
@@ -97,17 +97,13 @@ npm run lint
 ### Required Environment Variables (backend/.env)
 ```
 PORT=8080
-DB_URL=<mongodb-connection-string>
-GCP_BUCKET_NAME=<gcs-bucket-name>
-GCP_SERVICE_ACCOUNT_PATH=<path-to-service-account.json>
 GEMINI_API_KEY=<gemini-api-key>
+LLM_MODEL=gemini-2.5-flash
 ```
 
 ### Prerequisites
 - Node.js v18+
 - FFmpeg in system PATH
-- Google Cloud Platform account with service account
-- MongoDB database
 - Gemini API key
 
 ## Development Guidelines
@@ -184,8 +180,6 @@ GEMINI_API_KEY=<gemini-api-key>
 
 ## Important Notes
 
-- Service account JSON file should be in `backend/src/` directory
-- MongoDB connection includes custom database name support
 - Frontend uses Turbopack for faster development builds
 - All API responses follow consistent JSON format
 - File uploads handled via multer middleware
