@@ -13,7 +13,17 @@ const { cleanupLocalMedia, getCleanupConfig } = require('./utils/mediaStorage');
 
 const app = express();
 const port = process.env.PORT || 8080;
-const allowedOrigins = ['http://localhost:3000', 'http://localhost:3001'];
+const configuredCorsOrigins = (process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://vinci-clips-frontend-382403086889.us-central1.run.app',
+    'https://clips.tryvinci.com',
+    ...configuredCorsOrigins,
+];
 
 app.use((req, res, next) => {
 
@@ -40,7 +50,7 @@ app.use((req, res, next) => {
 });
 
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:3001', 'https://vinci-clips-frontend-382403086889.us-central1.run.app','https://clips.tryvinci.com'],
+    origin: allowedOrigins,
     credentials: true,
     exposedHeaders: ['Content-Length', 'X-Content-Length', 'Content-Disposition']
 }));
@@ -48,6 +58,14 @@ app.use(express.json());
 
 // Add request logging middleware
 app.use(logger.requestMiddleware);
+
+app.get('/health', (req, res) => {
+    res.status(200).json({
+        status: 'healthy',
+        service: 'backend',
+        uptime: process.uptime(),
+    });
+});
 
 // Mount routes
 app.use('/clips', mainRoutes);
