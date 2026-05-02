@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { useParams, useRouter } from 'next/navigation';
 import ReframeModal from '@/components/ReframeModal';
 import CaptionGenerator from '@/components/CaptionGenerator';
-import { AlertCircle, Download, ExternalLink, Loader2, Save, Trash2, Wand2 } from 'lucide-react';
+import { AlertCircle, Download, ExternalLink, Loader2, RefreshCcw, Save, Trash2, Wand2 } from 'lucide-react';
 import StreamerGameplayCrop from '@/components/StreamerGameplayCrop';
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 interface TranscriptSegment {
@@ -84,6 +84,7 @@ export default function TranscriptDetailPage() {
     const [generatedClips, setGeneratedClips] = useState<{[key: number]: any}>({});
     const [deletingVersions, setDeletingVersions] = useState<{[key: string]: boolean}>({});
     const [savingHooks, setSavingHooks] = useState<{[key: number]: boolean}>({});
+    const [regeneratingHooks, setRegeneratingHooks] = useState<{[key: number]: boolean}>({});
     const [isReframeModalOpen, setIsReframeModalOpen] = useState(false);
     const [selectedClipForReframe, setSelectedClipForReframe] = useState<any>(null);
     const [retryingTranscript, setRetryingTranscript] = useState(false);
@@ -236,6 +237,26 @@ export default function TranscriptDetailPage() {
             console.error('Clip hook save error:', err);
         } finally {
             setSavingHooks(prev => ({ ...prev, [clipIndex]: false }));
+        }
+    };
+
+    const regenerateClipHook = async (clipIndex: number) => {
+        if (!transcript) return;
+
+        setRegeneratingHooks(prev => ({ ...prev, [clipIndex]: true }));
+        setError('');
+
+        try {
+            const response = await axios.post(`${API_URL}/clips/clips/${transcript._id}/${clipIndex}/hook/regenerate`);
+            setTranscript(prev => prev ? { ...prev, clips: response.data.clips || prev.clips } : prev);
+            setGeneratedClips(response.data.generatedClips || {});
+        } catch (err: any) {
+            const errorMessage = err.response?.data?.error || 'Failed to regenerate clip hook.';
+            const errorDetails = err.response?.data?.details ? ` (${err.response.data.details})` : '';
+            setError(errorMessage + errorDetails);
+            console.error('Clip hook regeneration error:', err);
+        } finally {
+            setRegeneratingHooks(prev => ({ ...prev, [clipIndex]: false }));
         }
     };
 
@@ -443,16 +464,32 @@ export default function TranscriptDetailPage() {
                                                         />
                                                         Hook
                                                     </label>
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        onClick={() => saveClipHook(index)}
-                                                        disabled={savingHooks[index]}
-                                                        className="h-7 px-2 text-xs"
-                                                    >
-                                                        <Save className="mr-1 h-3 w-3" />
-                                                        {savingHooks[index] ? 'Saving...' : 'Save'}
-                                                    </Button>
+                                                    <div className="flex flex-wrap justify-end gap-2">
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => regenerateClipHook(index)}
+                                                            disabled={regeneratingHooks[index]}
+                                                            className="h-7 px-2 text-xs"
+                                                        >
+                                                            {regeneratingHooks[index] ? (
+                                                                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                                                            ) : (
+                                                                <RefreshCcw className="mr-1 h-3 w-3" />
+                                                            )}
+                                                            {regeneratingHooks[index] ? 'Regenerating...' : 'Regenerate Hook'}
+                                                        </Button>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => saveClipHook(index)}
+                                                            disabled={savingHooks[index]}
+                                                            className="h-7 px-2 text-xs"
+                                                        >
+                                                            <Save className="mr-1 h-3 w-3" />
+                                                            {savingHooks[index] ? 'Saving...' : 'Save'}
+                                                        </Button>
+                                                    </div>
                                                 </div>
                                                 <textarea
                                                     value={clip.hook?.text || ''}

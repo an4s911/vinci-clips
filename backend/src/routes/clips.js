@@ -3,6 +3,8 @@ const Transcript = require('../models/Transcript');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
+const { generateJsonContent } = require('../utils/gemini');
 const {
     CLIPS_DIR,
     appendPrimaryClipVideo,
@@ -15,8 +17,18 @@ const {
     normalizeClipHook,
     normalizeTranscriptClips
 } = require('../utils/clipVideos');
+const { getCoveredTranscriptText } = require('../utils/clipModeration');
 
 const router = express.Router();
+
+const HOOK_RESPONSE_SCHEMA = {
+    type: 'OBJECT',
+    properties: {
+        hook: { type: 'STRING' },
+    },
+    required: ['hook'],
+    propertyOrdering: ['hook'],
+};
 
 function sanitizeZipName(value, fallback = 'clip') {
     const sanitized = String(value || fallback)
@@ -386,6 +398,129 @@ router.patch('/:transcriptId/:clipIndex/hook', async (req, res) => {
         console.error('Error updating clip hook:', error);
         res.status(500).json({
             error: 'Failed to update clip hook.',
+            details: error.message
+        });
+    }
+});
+
+router.post('/:transcriptId/:clipIndex/hook/regenerate', async (req, res) => {
+    const { transcriptId } = req.params;
+    const clipIndex = Number.parseInt(req.params.clipIndex, 10);
+
+    try {
+        const transcript = await Transcript.findById(transcriptId);
+        if (!transcript) {
+            return res.status(404).json({ error: 'Transcript not found.' });
+        }
+
+        const normalizedClips = normalizeTranscriptClips(transcript);
+        if (!Number.isInteger(clipIndex) || clipIndex < 0 || clipIndex >= normalizedClips.length) {
+            return res.status(400).json({ error: 'Invalid clip index.' });
+        }
+
+        const clip = normalizedClips[clipIndex];
+        const coveredText = getCoveredTranscriptText(transcript.transcript, clip);
+        if (!coveredText.trim()) {
+            return res.status(400).json({
+                error: 'Cannot regenerate hook.',
+                details: 'No transcript text was found for this clip.'
+            });
+        }
+
+        const currentHookText = typeof clip.hook?.text === 'string' ? clip.hook.text.trim() : '';
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const prompt = `Create one new short creator overlay hook for this video clip.
+
+Rules:
+- Return a hook only, not a title or explanation.
+- 3-10 words.
+- Write it like YouTube Shorts/TikTok top-overlay setup text, not a polished title.
+- Make viewers want to see what happens next, not understand the whole clip.
+- Use casual, punchy, creator-style phrasing.
+- Prefer setup lines, cliffhangers, reaction teases, bold claims, or occasional questions.
+- Questions are allowed, but most hooks should be statements unless the clip naturally fits a question.
+- Avoid generic summaries like "A funny moment from the video" or "Discussion about gaming strategy".
+- Do not use title case unless it naturally fits the phrase.
+- Good hook examples:
+  - "look what this guy did:"
+  - "he instantly regretted this"
+  - "this should not have worked"
+  - "wait for his reaction"
+  - "then everything changed"
+  - "a $5 mouse can do this?"
+  - "bro thought he had it"
+  - "this got awkward fast"
+  - "nobody expected that ending"
+  - "he said it too early"
+- Avoid reusing this current hook: "${currentHookText || 'none'}"
+
+Clip title: ${clip.title || 'Untitled clip'}
+Clip transcript: ${coveredText}`;
+
+        const { data, model: resolvedModel } = await generateJsonContent({
+            genAI,
+            logLabel: `Hook regeneration for ${transcriptId}:${clipIndex}`,
+            contents: [{
+                role: 'user',
+                parts: [{ text: prompt }],
+            }],
+            responseSchema: HOOK_RESPONSE_SCHEMA,
+            safetySettings: [
+                {
+                    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+                    threshold: HarmBlockThreshold.BLOCK_NONE,
+                },
+                {
+                    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                    threshold: HarmBlockThreshold.BLOCK_NONE,
+                },
+                {
+                    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                    threshold: HarmBlockThreshold.BLOCK_NONE,
+                },
+                {
+                    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                    threshold: HarmBlockThreshold.BLOCK_NONE,
+                },
+            ],
+        });
+
+        const hookText = typeof data?.hook === 'string'
+            ? data.hook.trim().replace(/^["']|["']$/g, '').replace(/\s+/g, ' ').slice(0, 120)
+            : '';
+        if (!hookText) {
+            return res.status(502).json({
+                error: 'Failed to regenerate hook.',
+                details: 'The AI returned an empty hook.'
+            });
+        }
+
+        console.log(`Hook regeneration for ${transcriptId}:${clipIndex} used Gemini model: ${resolvedModel}`);
+
+        normalizedClips[clipIndex] = {
+            ...clip,
+            hook: normalizeClipHook({
+                text: hookText,
+                enabled: true,
+                updatedAt: new Date().toISOString()
+            })
+        };
+
+        const updatedTranscript = await Transcript.findByIdAndUpdate(transcript._id, {
+            clips: normalizedClips
+        });
+        const clips = normalizeTranscriptClips(updatedTranscript);
+
+        res.json({
+            success: true,
+            hook: clips[clipIndex].hook,
+            clips,
+            generatedClips: buildGeneratedClipsMap(clips)
+        });
+    } catch (error) {
+        console.error('Error regenerating clip hook:', error);
+        res.status(500).json({
+            error: 'Failed to regenerate clip hook.',
             details: error.message
         });
     }
