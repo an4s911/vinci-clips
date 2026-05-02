@@ -3,7 +3,6 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-15.3.5-black)](https://nextjs.org/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-Latest-green)](https://mongodb.com/)
 
 > AI-powered video clipping platform that automatically transforms long-form videos into engaging short clips optimized for social media platforms.
 
@@ -62,13 +61,15 @@ Vinci Clips is an open-source platform that leverages artificial intelligence to
 
 **Technology Stack:**
 - **Frontend**: Next.js 15, React, TypeScript, Tailwind CSS, Shadcn/ui
-- **Backend**: Node.js, Express.js, MongoDB with Mongoose
+- **Backend**: Node.js, Express.js, local JSON-backed persistence
 - **AI/ML**: Google Gemini API for transcription and analysis
 - **Media Processing**: FFmpeg for video/audio conversion and manipulation
-- **Cloud Storage**: Google Cloud Storage with signed URL access
+- **Media Storage**: Local filesystem storage, with object storage planned
 - **Infrastructure**: Docker-ready with environment-based configuration
 
 ## Getting Started
+
+For Docker-based local development, local production-style testing, and VPS deployment with nginx + Certbot, see [docker-setup.md](./docker-setup.md).
 
 ### Prerequisites
 
@@ -76,8 +77,6 @@ Before running Vinci Clips, ensure you have the following installed:
 
 - **Node.js** (version 18.0.0 or higher)
 - **FFmpeg** (installed and available in your system PATH)
-- **MongoDB** (local installation or cloud instance)
-
 Additionally, you'll and API keys for:
 - **Google Gemini API** (for AI transcription services)
 
@@ -174,7 +173,7 @@ For detailed API documentation, see [API Reference](docs/api.md).
 vinci-clips/
 ├── backend/                 # Express.js API server
 │   ├── src/
-│   │   ├── models/         # MongoDB schemas
+│   │   ├── models/         # Local persistence models
 │   │   ├── routes/         # API endpoints
 │   │   └── index.js        # Server entry point
 |   └── storage/db.json     # All your data is stored here
@@ -266,9 +265,9 @@ We welcome contributions to Vinci Clips! Please see our [Contributing Guidelines
 ### Core Platform (Completed)
 - Video upload with drag-and-drop interface (2GB limit)
 - FFmpeg-based video processing and thumbnail generation
-- Google Cloud Storage integration with signed URLs
+- Local media storage for uploaded and generated files
 - AI transcription using Google Gemini API with speaker diarization
-- MongoDB data persistence with comprehensive status tracking
+- Local data persistence with comprehensive status tracking
 - React/Next.js frontend with responsive design
 - Basic clip generation from transcript segments
 - Streamer's Webcam And Gameplay Video into a reel conversion
@@ -322,7 +321,7 @@ For enterprise deployments, custom development, or commercial licensing options,
 - **Google Gemini API** for powerful AI transcription capabilities
 - **FFmpeg** for reliable video processing
 - **Next.js** and **Vercel** for excellent development experience
-- **MongoDB** for flexible data storage
+- **LocalDB** for lightweight file-backed storage
 - **Open Source Community** for inspiration and contributions
 
 ---

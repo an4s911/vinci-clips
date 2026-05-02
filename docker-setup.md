@@ -6,7 +6,6 @@ This guide explains how to run Vinci Clips using Docker for both development and
 
 - Docker Engine 20.10+
 - Docker Compose 2.0+
-- Google Cloud Platform service account key
 - Gemini API key
 
 ## Development Setup
@@ -21,9 +20,8 @@ cp .env.example .env
 ```
 
 Edit `.env` and fill in your actual values:
-- `GCP_BUCKET_NAME`: Your Google Cloud Storage bucket name
-- `GCP_SERVICE_ACCOUNT_PATH`: Path to your GCP service account JSON file (relative to project root)
 - `GEMINI_API_KEY`: Your Google Gemini API key
+- `REDIS_PASSWORD`: Local Redis password, for example `devredispassword`
 
 **Important**: This `.env` file in the project root is specifically for Docker Compose. For local development without Docker, see `ENVIRONMENT_SETUP.md`.
 
@@ -48,32 +46,97 @@ reload automatically without rebuilding the images. Rebuild only when
 This will start:
 - **Frontend**: http://localhost:3000
 - **Backend API**: http://localhost:8080
-- **MongoDB**: localhost:27017
-- **Redis**: localhost:6379
+- **Redis**: localhost:6379, password-protected with `REDIS_PASSWORD`
 
-### 3. View Logs
+### 3. Test Development Environment
+
+```bash
+docker compose ps
+curl http://localhost:8080/health
+curl http://localhost:3000/api/health
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" ping
+```
+
+Open the app at:
+
+```text
+http://localhost:3000/upload
+```
+
+### 4. View Logs
 
 ```bash
 # View all logs
-docker-compose logs -f
+docker compose logs -f
 
 # View specific service logs
-docker-compose logs -f backend
-docker-compose logs -f frontend
-docker-compose logs -f mongodb
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose logs -f redis
 ```
 
-### 4. Stop Services
+### 5. Stop Services
 
 ```bash
 # Stop all services
-docker-compose down
+docker compose down
 
-# Stop and remove volumes (destroys database data)
-docker-compose down -v
+# Stop and remove volumes (destroys Redis data)
+docker compose down -v
 ```
 
-## Production Setup
+## Local Production Build Test
+
+Use the HTTP-only nginx config locally. The HTTPS config expects real Let's Encrypt certificate files for `APP_DOMAIN`, so it is meant for the VPS after the first certificate has been issued.
+
+### 1. Configure Local Production Env
+
+The repository includes `.env.prod.local` for local production-style testing. Confirm it has values like:
+
+```env
+APP_DOMAIN=localhost
+LETSENCRYPT_EMAIL=admin@example.com
+GEMINI_API_KEY=your_gemini_key_here
+LLM_MODEL=gemini-2.5-flash
+REDIS_PASSWORD=localredispassword
+NEXT_PUBLIC_API_URL=/api
+CORS_ORIGIN=http://localhost
+```
+
+### 2. Prepare Local Persistent Directories
+
+```bash
+mkdir -p backend/uploads backend/storage backend/temp backend/cache backend/logs certbot/conf certbot/www
+```
+
+### 3. Start Local Production Stack
+
+```bash
+NGINX_CONF=./nginx/nginx.http.conf docker compose --env-file .env.prod.local -f docker-compose.prod.yml up -d --build
+```
+
+### 4. Test Local Production Stack
+
+```bash
+docker compose --env-file .env.prod.local -f docker-compose.prod.yml ps
+curl http://localhost/health
+curl http://localhost/api/health
+docker compose --env-file .env.prod.local -f docker-compose.prod.yml exec redis redis-cli -a localredispassword ping
+```
+
+Open:
+
+```text
+http://localhost/upload
+```
+
+### 5. Stop Local Production Stack
+
+```bash
+docker compose --env-file .env.prod.local -f docker-compose.prod.yml down
+```
+
+## VPS Production Setup
 
 ### 1. Environment Configuration
 
@@ -84,40 +147,101 @@ cp .env.example .env.prod
 ```
 
 Configure production-specific values in `.env.prod`:
-- Set strong passwords for `MONGO_ROOT_PASSWORD`
-- Set your production domain for `CORS_ORIGIN`
-- Set your API URL for `NEXT_PUBLIC_API_URL`
+- Set `APP_DOMAIN` to the domain that points at your VPS
+- Set `LETSENCRYPT_EMAIL` for certificate registration and renewal notices
+- Set a strong `REDIS_PASSWORD`
+- Set `NEXT_PUBLIC_API_URL=/api`
+- Set `CORS_ORIGIN=https://$APP_DOMAIN`
 
-### 2. SSL Certificate Setup (Recommended)
+Example:
 
-Place your SSL certificates in the `nginx/ssl/` directory:
-- `certificate.crt`
-- `private.key`
+```env
+APP_DOMAIN=yourdomain.com
+LETSENCRYPT_EMAIL=you@example.com
+GEMINI_API_KEY=your_key
+LLM_MODEL=gemini-2.5-flash
+REDIS_PASSWORD=strong_random_password
+NEXT_PUBLIC_API_URL=/api
+CORS_ORIGIN=https://yourdomain.com
+```
 
-Uncomment the HTTPS server block in `nginx/nginx.conf`.
+### 2. Prepare Persistent Directories
 
-### 3. Start Production Environment
+Run this once on the VPS from the project root:
 
 ```bash
-# Load environment variables and start
-docker-compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+mkdir -p backend/uploads backend/storage backend/temp backend/cache backend/logs certbot/conf certbot/www
+sudo chown -R 1001:1001 backend/uploads backend/storage backend/temp backend/cache backend/logs
+```
+
+### 3. First Boot With HTTP-Only Nginx
+
+Start the stack with the HTTP config so Let's Encrypt can validate the domain:
+
+```bash
+NGINX_CONF=./nginx/nginx.http.conf docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+```
+
+### 4. Issue the First Certificate
+
+DNS for `APP_DOMAIN` must already point to the VPS before this command runs.
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm certbot \
+  certonly --webroot \
+  -w /var/www/certbot \
+  -d "$APP_DOMAIN" \
+  --email "$LETSENCRYPT_EMAIL" \
+  --agree-tos \
+  --no-eff-email
+```
+
+### 5. Switch to HTTPS Nginx
+
+```bash
+NGINX_CONF=./nginx/nginx.https.conf docker compose --env-file .env.prod -f docker-compose.prod.yml up -d nginx
+```
+
+The `certbot` service runs an automatic renewal loop. The `nginx` service reloads periodically so renewed certificates are picked up without mounting the Docker socket.
+
+### 6. Test Renewal
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm certbot renew --dry-run
 ```
 
 This will start:
-- **Frontend + Backend**: http://localhost (proxied through Nginx)
-- **HTTPS**: https://localhost (if SSL configured)
+- **Frontend + Backend**: proxied internally through Nginx
+- **Public HTTP/HTTPS**: ports 80 and 443 on the Nginx container only
+- **Redis**: internal Docker network only, password-protected
 
-### 4. Production Monitoring
+### 7. Production Monitoring
 
 ```bash
 # Check service status
-docker-compose -f docker-compose.prod.yml ps
+docker compose --env-file .env.prod -f docker-compose.prod.yml ps
 
 # View logs
-docker-compose -f docker-compose.prod.yml logs -f
+docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f
 
 # Monitor resource usage
 docker stats
+```
+
+### 8. Verify Production Deployment
+
+```bash
+curl http://$APP_DOMAIN/health
+curl https://$APP_DOMAIN/health
+curl https://$APP_DOMAIN/api/health
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec redis redis-cli -a "$REDIS_PASSWORD" ping
+docker compose --env-file .env.prod -f docker-compose.prod.yml ps
+```
+
+Open:
+
+```text
+https://yourdomain.com/upload
 ```
 
 ## Service Architecture
@@ -134,20 +258,14 @@ docker stats
 │Frontend│ │Backend│ :3000, :8080
 │Next.js │ │Express│
 └───┬──┘ └───┬──┘
-    │        │
-    │    ┌───▼──┐
-    │    │Redis │ :6379
-    │    │Cache │
-    │    └──────┘
-    │        │
-    │    ┌───▼──┐
-    │    │MongoDB│ :27017
-    │    │Database│
-    │    └──────┘
+    │    ┌───▼────┐
+    │    │ Redis  │ :6379 internal
+    │    │ Cache  │
+    │    └────────┘
     │
 ┌───▼────────────┐
-│ Google Cloud   │
-│ Storage + AI   │
+│ External APIs  │
+│ Gemini         │
 └────────────────┘
 ```
 
@@ -155,28 +273,22 @@ docker stats
 
 ### Common Issues
 
-**1. Permission denied for GCP service account**
-```bash
-# Ensure the service account file has correct permissions
-chmod 600 /path/to/service-account.json
-```
-
-**2. FFmpeg not found**
+**1. FFmpeg not found**
 ```bash
 # Rebuild the backend container
-docker-compose build --no-cache backend
+docker compose build --no-cache backend
 ```
 
-**3. MongoDB connection failed**
+**2. Redis authentication failed**
 ```bash
-# Check if MongoDB is running
-docker-compose ps mongodb
+# Check if Redis is running
+docker compose ps redis
 
-# View MongoDB logs
-docker-compose logs mongodb
+# Verify auth
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" ping
 ```
 
-**4. Out of disk space**
+**3. Out of disk space**
 ```bash
 # Clean up unused Docker resources
 docker system prune -a
@@ -196,6 +308,8 @@ docker-compose ps
 # Manual health check
 curl http://localhost:8080/health  # Backend
 curl http://localhost:3000/api/health  # Frontend
+curl http://localhost/health  # Nginx
+curl http://localhost/api/health  # Backend through Nginx
 ```
 
 ### Development vs Production
@@ -211,16 +325,6 @@ curl http://localhost:3000/api/health  # Frontend
 
 ## Maintenance
 
-### Backup Database
-
-```bash
-# Create backup
-docker exec vinci-clips-mongodb-prod mongodump --uri="mongodb://admin:password@localhost:27017/vinci-clips?authSource=admin" --out=/backup
-
-# Copy backup from container
-docker cp vinci-clips-mongodb-prod:/backup ./mongodb-backup
-```
-
 ### Update Application
 
 ```bash
@@ -228,7 +332,7 @@ docker cp vinci-clips-mongodb-prod:/backup ./mongodb-backup
 git pull origin main
 
 # Rebuild and restart services
-docker-compose -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 ```
 
 ### Scale Services
