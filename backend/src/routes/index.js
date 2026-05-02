@@ -11,6 +11,7 @@ const importRoutes = require('./import');
 const retryRoutes = require('./retry-transcription');
 const reframeRoutes = require('./reframe');
 const streamerRoutes = require('./streamer');
+const storageRoutes = require('./storage');
 
 
 // Mount specific routes. Order matters for wildcard routes.
@@ -23,6 +24,7 @@ router.use('/captions', captionsRoutes); // TikTok/Reels style caption generatio
 router.use('/reframe', reframeRoutes); // AI-powered video reframing for social media
 router.use('/streamer', streamerRoutes); // Streamer & gameplay video processing
 router.use('/retry', retryRoutes); // Retry failed operations
+router.use('/storage', storageRoutes); // Local media storage maintenance
 router.use('/admin', fixStatusRoutes); // Admin routes for fixing data issues
 
-module.exports = router; 
+module.exports = router;

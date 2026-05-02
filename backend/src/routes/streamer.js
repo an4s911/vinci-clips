@@ -4,6 +4,7 @@ const fs = require('fs');
 const ffmpeg = require('fluent-ffmpeg');
 const Transcript = require('../models/Transcript');
 const logger = require('../utils/logger');
+const { deleteLocalMedia } = require('../utils/mediaStorage');
 
 const router = express.Router();
 
@@ -12,6 +13,7 @@ const router = express.Router();
  * POST /clips/streamer/streamer-gameplay
  */
 router.post('/streamer-gameplay', async (req, res) => {
+  const tempFiles = [];
   try {
     const { 
       transcriptId, 
@@ -45,6 +47,7 @@ router.post('/streamer-gameplay', async (req, res) => {
     const tempWebcamPath = path.join(tempDir, `webcam_${timestamp}.mp4`);
     const tempGameplayPath = path.join(tempDir, `gameplay_${timestamp}.mp4`);
     const finalOutputPath = path.join(tempDir, `final_${timestamp}.mp4`);
+    tempFiles.push(tempWebcamPath, tempGameplayPath, finalOutputPath);
     const outputFilename = outputName || `streamer_gameplay_${timestamp}.mp4`;
     
     logger.info('Starting streamer gameplay processing', { 
@@ -149,6 +152,7 @@ router.post('/streamer-gameplay', async (req, res) => {
     }
     const destPath = path.join(destDir, outputFilename);
     fs.renameSync(finalOutputPath, destPath);
+    tempFiles.splice(tempFiles.indexOf(finalOutputPath), 1);
     const processedVideoUrl = `/uploads/temp/${outputFilename}`;
     
     res.json({
@@ -163,6 +167,8 @@ router.post('/streamer-gameplay', async (req, res) => {
       error: 'Failed to process streamer + gameplay video',
       details: error.message
     });
+  } finally {
+    await Promise.all(tempFiles.map((filePath) => deleteLocalMedia(filePath, { missingOk: true })));
   }
 });
 

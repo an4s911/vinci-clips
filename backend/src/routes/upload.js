@@ -18,6 +18,7 @@ const {
     runTrackedCommand,
     startTranscriptWorker,
 } = require('../utils/backgroundJobs');
+const { deleteLocalMedia } = require('../utils/mediaStorage');
 
 const upload = multer({
     dest: 'uploads/temp/',
@@ -53,6 +54,7 @@ async function processUploadedFile({ transcriptId, originalName, videoPath }) {
     let mp3DestPath = null;
     let thumbnailDestPath = null;
 
+    try {
     logVideoProcessing(transcriptId, 'running', 'Background upload job started', { jobType, phase: 'uploaded', fileName: originalName });
 
     await assertTranscriptNotCancelled(transcriptId, jobType);
@@ -172,6 +174,13 @@ async function processUploadedFile({ transcriptId, originalName, videoPath }) {
         wordCount: Array.isArray(transcriptContent) ? transcriptContent.length : null,
     });
     await completeTranscriptJob(transcriptId, jobType, 'Transcription completed.');
+    } finally {
+        await Promise.all([
+            deleteLocalMedia(videoPath, { missingOk: true }),
+            deleteLocalMedia(mp3Path, { missingOk: true }),
+            deleteLocalMedia(thumbnailPath, { missingOk: true }),
+        ]);
+    }
 }
 
 router.post('/file', upload.single('video'), async (req, res) => {

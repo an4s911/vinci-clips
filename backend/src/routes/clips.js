@@ -28,6 +28,7 @@ const {
     startClipWorker,
     updateClipGeneration
 } = require('../utils/backgroundJobs');
+const { deleteLocalMedia } = require('../utils/mediaStorage');
 
 const router = express.Router();
 
@@ -286,8 +287,10 @@ async function generateSingleClipInBackground(transcriptId, clipIndex) {
             });
         } finally {
             await markClipPhase(transcriptId, clipIndex, 'cleanup-temp', 'Cleaning up temporary segment files.');
-            segmentFiles.forEach(file => fs.unlink(file, () => {}));
-            fs.unlink(concatFilePath, () => {});
+            await Promise.all([
+                ...segmentFiles.map(file => deleteLocalMedia(file, { missingOk: true })),
+                deleteLocalMedia(concatFilePath, { missingOk: true }),
+            ]);
             logVideoProcessing(transcriptId, 'completed', 'Clip generation temp cleanup completed', {
                 jobType: 'clip-generation',
                 clipIndex,

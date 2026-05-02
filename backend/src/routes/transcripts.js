@@ -6,6 +6,7 @@ const {
     normalizeTranscriptClips
 } = require('../utils/clipVideos');
 const { requestTranscriptCancel } = require('../utils/backgroundJobs');
+const { deleteTranscriptMedia } = require('../utils/mediaStorage');
 
 const router = express.Router();
 
@@ -101,27 +102,15 @@ router.delete('/:id', async (req, res) => {
             return res.status(404).json({ message: 'Transcript not found' });
         }
 
-        const fs = require('fs');
-        const path = require('path');
-
-        // Delete local files
-        if (transcript.videoUrl) {
-            const videoPath = path.join(__dirname, '..', '..', 'storage', transcript.videoUrl);
-            if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
-        }
-        if (transcript.mp3Url) {
-            const mp3Path = path.join(__dirname, '..', '..', 'storage', transcript.mp3Url);
-            if (fs.existsSync(mp3Path)) fs.unlinkSync(mp3Path);
-        }
-        if (transcript.thumbnailUrl) {
-            const thumbnailPath = path.join(__dirname, '..', '..', 'storage', transcript.thumbnailUrl);
-            if (fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath);
-        }
+        const deletedMedia = await deleteTranscriptMedia(transcript);
         
         // Delete the transcript from the database
         await Transcript.findByIdAndDelete(id);
         
-        res.status(200).json({ message: 'Transcript and associated files deleted successfully' });
+        res.status(200).json({
+            message: 'Transcript and associated files deleted successfully',
+            deletedMedia: deletedMedia.filter((item) => item.deleted).length,
+        });
     } catch (error) {
         console.error('Delete error:', error);
         res.status(500).json({ message: `Failed to delete transcript: ${error.message}` });

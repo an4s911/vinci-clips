@@ -14,6 +14,7 @@ const {
     makeTimestampedFilename,
     normalizeTranscriptClips
 } = require('../utils/clipVideos');
+const { deleteLocalMedia } = require('../utils/mediaStorage');
 
 const router = express.Router();
 
@@ -355,11 +356,7 @@ router.post('/generate', async (req, res) => {
                 logger
             });
             if (!captionsOnly) {
-                try {
-                    fs.unlinkSync(outputPath);
-                } catch (error) {
-                    logger.warn(`Failed to clean up temporary reframed file: ${error.message}`);
-                }
+                await deleteLocalMedia(outputPath, { missingOk: true });
             }
             finalSourcePath = captionedOutputPath;
         }

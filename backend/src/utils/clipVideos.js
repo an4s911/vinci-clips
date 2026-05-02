@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const { deleteLocalMedia, resolveLocalMediaPath } = require('./mediaStorage');
 
 const CLIPS_DIR = path.join(__dirname, '..', '..', 'uploads', 'clips');
 const UPLOADS_DIR = path.join(__dirname, '..', '..', 'uploads');
@@ -159,16 +160,13 @@ async function appendPrimaryClipVideo(Transcript, transcript, clipIndex, videoRe
 }
 
 function getVideoFilePath(video) {
-    if (!video?.url || !video.url.startsWith('/uploads/')) {
+    if (!video?.url) {
         throw new Error('Video URL is not a local upload path.');
     }
 
-    const relativePath = decodeURIComponent(video.url.replace(/^\/uploads\/?/, ''));
-    const resolvedPath = path.resolve(UPLOADS_DIR, relativePath);
-    const uploadsRoot = path.resolve(UPLOADS_DIR);
-
-    if (resolvedPath !== uploadsRoot && !resolvedPath.startsWith(`${uploadsRoot}${path.sep}`)) {
-        throw new Error('Video path resolves outside uploads directory.');
+    const resolvedPath = resolveLocalMediaPath(video.url);
+    if (!resolvedPath || !resolvedPath.startsWith(path.resolve(UPLOADS_DIR))) {
+        throw new Error('Video URL is not a local upload path.');
     }
 
     return resolvedPath;
@@ -188,10 +186,7 @@ async function deleteClipVideoVersion(Transcript, transcript, clipIndex, videoId
         return null;
     }
 
-    const videoPath = getVideoFilePath(videoToDelete);
-    if (fs.existsSync(videoPath)) {
-        fs.unlinkSync(videoPath);
-    }
+    await deleteLocalMedia(videoToDelete.url, { missingOk: true });
 
     const remainingVideos = videos.filter(video => video.id !== videoId);
     const nextPrimary = remainingVideos.length > 0

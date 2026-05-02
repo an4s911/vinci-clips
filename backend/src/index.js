@@ -9,6 +9,7 @@ require('dotenv').config();
 
 const logger = require('./utils/logger');
 const mainRoutes = require('./routes/index');
+const { cleanupLocalMedia, getCleanupConfig } = require('./utils/mediaStorage');
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -59,9 +60,36 @@ async function startServer() {
         app.listen(port, () => {
             logger.info(`Server started successfully on port ${port}`);
         });
+        startMediaCleanupScheduler();
     } catch (error) {
         logger.logError(error, { context: 'server_startup' });
         process.exit(1);
+    }
+}
+
+function startMediaCleanupScheduler() {
+    const config = getCleanupConfig();
+    if (!config.enabled) {
+        logger.info('Local media cleanup scheduler disabled.');
+        return;
+    }
+
+    const runCleanup = async () => {
+        try {
+            const result = await cleanupLocalMedia({
+                tempRetentionHours: config.tempRetentionHours,
+                unreferencedRetentionHours: config.unreferencedRetentionHours,
+            });
+            logger.info('Local media cleanup completed.', result.summary);
+        } catch (error) {
+            logger.warn(`Local media cleanup failed: ${error.message}`);
+        }
+    };
+
+    setImmediate(runCleanup);
+    const intervalMs = config.intervalHours * 60 * 60 * 1000;
+    if (intervalMs > 0) {
+        setInterval(runCleanup, intervalMs).unref();
     }
 }
 

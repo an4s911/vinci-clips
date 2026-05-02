@@ -19,6 +19,7 @@ const {
     runTrackedFile,
     startTranscriptWorker,
 } = require('../utils/backgroundJobs');
+const { deleteLocalMedia } = require('../utils/mediaStorage');
 
 const router = express.Router();
 const execOptions = { maxBuffer: 20 * 1024 * 1024 };
@@ -132,6 +133,7 @@ async function processUrlImport({ transcriptId, url, platform }) {
     let thumbnailPath = `${videoPath}_thumbnail.jpg`;
     let hasSavedMediaArtifacts = false;
 
+    try {
     logVideoProcessing(transcriptId, 'running', 'Background URL import job started', { jobType, phase: 'extract-metadata', url, platform });
 
     await assertTranscriptNotCancelled(transcriptId, jobType);
@@ -253,6 +255,13 @@ async function processUrlImport({ transcriptId, url, platform }) {
     await completeTranscriptJob(transcriptId, jobType, 'Import and transcription completed.');
 
     return { hasSavedMediaArtifacts };
+    } finally {
+        await Promise.all([
+            deleteLocalMedia(videoPath, { missingOk: true }),
+            deleteLocalMedia(mp3Path, { missingOk: true }),
+            deleteLocalMedia(thumbnailPath, { missingOk: true }),
+        ]);
+    }
 }
 
 router.post('/url', async (req, res) => {
