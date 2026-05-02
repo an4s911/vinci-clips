@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { useParams, useRouter } from 'next/navigation';
 import ReframeModal from '@/components/ReframeModal';
 import CaptionGenerator from '@/components/CaptionGenerator';
-import { Download, ExternalLink, Save, Trash2, Wand2 } from 'lucide-react';
+import { AlertCircle, Download, ExternalLink, Loader2, Save, Trash2, Wand2 } from 'lucide-react';
 import StreamerGameplayCrop from '@/components/StreamerGameplayCrop';
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 interface TranscriptSegment {
@@ -58,10 +58,13 @@ interface Transcript {
     _id: string;
     originalFilename: string;
     transcript: TranscriptSegment[];
-    videoUrl: string;
-    mp3Url: string;
+    videoUrl?: string;
+    mp3Url?: string;
     clips: Clip[];
     createdAt: string;
+    status?: 'uploading' | 'converting' | 'transcribing' | 'completed' | 'failed';
+    failureReason?: string | null;
+    failedAt?: string | null;
     analysisMetadata?: {
         filteredClipCount?: number;
         visibleClipCount?: number;
@@ -83,6 +86,7 @@ export default function TranscriptDetailPage() {
     const [savingHooks, setSavingHooks] = useState<{[key: number]: boolean}>({});
     const [isReframeModalOpen, setIsReframeModalOpen] = useState(false);
     const [selectedClipForReframe, setSelectedClipForReframe] = useState<any>(null);
+    const [retryingTranscript, setRetryingTranscript] = useState(false);
     const params = useParams();
     const router = useRouter();
     const id = params.id;
@@ -274,6 +278,27 @@ export default function TranscriptDetailPage() {
         return Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleString();
     };
 
+    const retryTranscription = async () => {
+        if (!transcript || retryingTranscript) return;
+
+        setRetryingTranscript(true);
+        setError('');
+
+        try {
+            await axios.post(`${API_URL}/clips/retry/${transcript._id}`);
+            await fetchTranscript();
+        } catch (err: any) {
+            const errorMessage = err.response?.data?.details || err.response?.data?.error || 'Failed to retry transcription.';
+            setError(errorMessage);
+        } finally {
+            setRetryingTranscript(false);
+        }
+    };
+
+    const hasTranscriptContent = Array.isArray(transcript?.transcript) && transcript.transcript.length > 0;
+    const isFailedWithoutTranscript = transcript?.status === 'failed' && !hasTranscriptContent;
+    const canAnalyzeTranscript = hasTranscriptContent;
+
     if (loading) {
         return <div className="flex justify-center items-center h-screen">Loading...</div>;
     }
@@ -298,6 +323,22 @@ export default function TranscriptDetailPage() {
                 </CardHeader>
                 <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     <div className="md:col-span-2">
+                        {isFailedWithoutTranscript && (
+                            <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-red-900">
+                                <div className="flex items-start gap-3">
+                                    <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
+                                    <div className="space-y-3">
+                                        <div>
+                                            <p className="font-semibold">Video import/download succeeded, but transcription failed.</p>
+                                            <p className="text-sm">{transcript.failureReason || 'Retry transcription to try again.'}</p>
+                                        </div>
+                                        <Button onClick={retryTranscription} disabled={retryingTranscript}>
+                                            {retryingTranscript ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</> : 'Retry Transcription'}
+                                        </Button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                         {transcript && transcript.videoUrl && (
                             <video 
                                 controls 
@@ -312,14 +353,14 @@ export default function TranscriptDetailPage() {
                                 <div className="flex gap-2">
                                     <Button 
                                         onClick={generateClips} 
-                                        disabled={analyzing}
+                                        disabled={analyzing || !canAnalyzeTranscript}
                                         variant="outline"
                                     >
                                         {analyzing ? 'Analyzing...' : 'Analyze for Clips'}
                                     </Button>
                                     <Button 
                                         onClick={clearAnalyzedClips} 
-                                        disabled={!transcript?.clips || transcript.clips.length === 0}
+                                        disabled={!canAnalyzeTranscript || !transcript?.clips || transcript.clips.length === 0}
                                         variant="destructive"
                                         size="sm"
                                     >
@@ -337,7 +378,9 @@ export default function TranscriptDetailPage() {
                                     {transcript.analysisMetadata.filteredClipCount} clip{transcript.analysisMetadata.filteredClipCount === 1 ? '' : 's'} hidden for language.
                                 </div>
                             ) : null}
-                            {transcript.clips && transcript.clips.length > 0 ? (
+                            {!canAnalyzeTranscript ? (
+                                <p className="mt-4 text-muted-foreground">Clip analysis is unavailable until transcript content exists.</p>
+                            ) : transcript.clips && transcript.clips.length > 0 ? (
                                 <div className="mt-4 space-y-4">
                                     {transcript.clips.map((clip, index) => {
                                         const primaryVideo = generatedClips[index] as ClipVideo | undefined;
@@ -548,19 +591,21 @@ export default function TranscriptDetailPage() {
                     <div>
                         <h3 className="text-2xl font-bold mb-4">Transcript</h3>
                         <div className="h-[600px] overflow-y-auto space-y-4 pr-4">
-                            {transcript.transcript.map((segment, index) => (
+                            {hasTranscriptContent ? transcript.transcript.map((segment, index) => (
                                 <div key={index}>
                                     <p className="font-semibold text-primary">{segment.speaker || 'Unknown Speaker'}: {segment.start} - {segment.end}</p>
                                     <p>{segment.text}</p>
                                 </div>
-                            ))}
+                            )) : (
+                                <p className="text-muted-foreground">No transcript content is available yet.</p>
+                            )}
                         </div>
                     </div>
                 </CardContent>
             </Card>
 
             {/* Caption Generator */}
-            {transcript && transcript.videoUrl && (
+            {transcript && transcript.videoUrl && hasTranscriptContent && (
                 <div className="grid gap-6">
                     <CaptionGenerator 
                         transcriptId={transcript._id} 

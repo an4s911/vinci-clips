@@ -4,6 +4,19 @@ const { v4: uuidv4 } = require('uuid');
 
 const dbPath = path.join(__dirname, '..', 'storage', 'db.json');
 
+function attachSaveMethod(document) {
+    if (!document || typeof document !== 'object') {
+        return document;
+    }
+
+    return {
+        ...document,
+        save: async function() {
+            return Transcript.findByIdAndUpdate(this._id, this);
+        }
+    };
+}
+
 function readDb() {
     const dbDir = path.dirname(dbPath);
     if (!fs.existsSync(dbDir)) {
@@ -28,12 +41,12 @@ const Transcript = {
             const dateA = a.createdAt ? new Date(a.createdAt) : 0;
             const dateB = b.createdAt ? new Date(b.createdAt) : 0;
             return dateB - dateA;
-        });
+        }).map(attachSaveMethod);
     },
 
     findById: async (id) => {
         const db = readDb();
-        return db.transcripts.find(t => t._id === id);
+        return attachSaveMethod(db.transcripts.find(t => t._id === id));
     },
 
     create: async (data) => {
@@ -50,7 +63,7 @@ const Transcript = {
         if (index === -1) return null;
         db.transcripts[index] = { ...db.transcripts[index], ...data };
         writeDb(db);
-        return db.transcripts[index];
+        return attachSaveMethod(db.transcripts[index]);
     },
 
     findByIdAndDelete: async (id) => {

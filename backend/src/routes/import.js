@@ -10,6 +10,29 @@ const { generateJsonContent } = require('../utils/gemini');
 
 const router = express.Router();
 const execOptions = { maxBuffer: 10 * 1024 * 1024 };
+const TRANSCRIPTION_PROMPT = "Transcribe the provided audio with word-level timestamps and identify the speaker for each word. Format the output as a JSON array of objects, where each object represents a single word with precise millisecond timing. Each object should have 'start' (in format MM:SS:mmm), 'end' (in format MM:SS:mmm), 'text' (single word), and 'speaker' fields. For example: [{'start': '00:00:000', 'end': '00:00:450', 'text': 'Hello', 'speaker': 'Speaker 1'}, {'start': '00:00:450', 'end': '00:00:890', 'text': 'world', 'speaker': 'Speaker 1'}]";
+const TRANSCRIPTION_SCHEMA = {
+    type: 'ARRAY',
+    items: {
+        type: 'OBJECT',
+        properties: {
+            start: { type: 'STRING' },
+            end: { type: 'STRING' },
+            text: { type: 'STRING' },
+            speaker: { type: 'STRING' },
+        },
+        required: ['start', 'end', 'text', 'speaker'],
+        propertyOrdering: ['start', 'end', 'text', 'speaker'],
+    },
+};
+
+const getUserSafeFailureReason = (error) => {
+    if (error?.code === 'TRANSCRIPTION_PARSE_FAILED') {
+        return 'Video import succeeded, but transcription failed because Gemini returned an invalid response. Retry transcription to try again.';
+    }
+
+    return 'Video import succeeded, but transcription failed. Retry transcription to try again.';
+};
 
 // Ensure the imports directory exists
 const importsDir = 'uploads/imports';
@@ -221,6 +244,8 @@ router.post('/url', async (req, res) => {
             originalFilename: `${videoInfo.title}.mp4`,
             transcript: [],
             status: 'uploading',
+            failureReason: null,
+            failedAt: null,
             importUrl: url,
             platform: platform,
             externalVideoId: videoInfo.videoId
@@ -232,6 +257,7 @@ router.post('/url', async (req, res) => {
         if (platform === 'youtube') {
             // Download video using ytdl stream to ensure audio+video
             const videoPath = path.join(importsDir, `${transcript._id}.mp4`);
+            let hasSavedMediaArtifacts = false;
             
             try {
                 // Download the video using ytdl stream instead of URL
@@ -295,8 +321,11 @@ router.post('/url', async (req, res) => {
                     mp3Url: mp3Url,
                     thumbnailUrl: thumbnailUrl,
                     duration: videoInfo.duration,
-                    status: 'transcribing'
+                    status: 'transcribing',
+                    failureReason: null,
+                    failedAt: null,
                 });
+                hasSavedMediaArtifacts = true;
                 
                 // Start transcription
                 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -309,39 +338,26 @@ router.post('/url', async (req, res) => {
 
                 const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
 
-                const prompt = "Transcribe the provided audio with word-level timestamps and identify the speaker for each word. Format the output as a JSON array of objects, where each object represents a single word with precise millisecond timing. Each object should have 'start' (in format MM:SS:mmm), 'end' (in format MM:SS:mmm), 'text' (single word), and 'speaker' fields. For example: [{'start': '00:00:000', 'end': '00:00:450', 'text': 'Hello', 'speaker': 'Speaker 1'}, {'start': '00:00:450', 'end': '00:00:890', 'text': 'world', 'speaker': 'Speaker 1'}]";
-
                 const { data: transcriptContent, model: resolvedModel } = await generateJsonContent({
                     genAI,
                     logLabel: `YouTube transcription for ${transcript._id}`,
                     contents: [{
                         role: 'user',
                         parts: [
-                            { text: prompt },
+                            { text: TRANSCRIPTION_PROMPT },
                             audioPart,
                         ],
                     }],
-                    responseSchema: {
-                        type: 'ARRAY',
-                        items: {
-                            type: 'OBJECT',
-                            properties: {
-                                start: { type: 'STRING' },
-                                end: { type: 'STRING' },
-                                text: { type: 'STRING' },
-                                speaker: { type: 'STRING' },
-                            },
-                            required: ['start', 'end', 'text', 'speaker'],
-                            propertyOrdering: ['start', 'end', 'text', 'speaker'],
-                        },
-                    },
+                    responseSchema: TRANSCRIPTION_SCHEMA,
                 });
                 console.log(`Transcription for ${transcript._id} used Gemini model: ${resolvedModel}`);
 
                 // Update transcript with transcription and mark as completed
                 const finalTranscript = await Transcript.findByIdAndUpdate(transcript._id, {
                     transcript: transcriptContent,
-                    status: 'completed'
+                    status: 'completed',
+                    failureReason: null,
+                    failedAt: null,
                 }, { new: true });
 
                 console.log(`Transcript ${transcript._id} for imported video completed successfully`);
@@ -354,8 +370,28 @@ router.post('/url', async (req, res) => {
                 
             } catch (downloadError) {
                 console.error('Download or transcription error:', downloadError);
-                await Transcript.findByIdAndUpdate(transcript._id, { status: 'failed' });
-                return res.status(500).json({ error: 'Failed to download or transcribe video' });
+                if (hasSavedMediaArtifacts) {
+                    const failureReason = getUserSafeFailureReason(downloadError);
+                    await Transcript.findByIdAndUpdate(transcript._id, {
+                        status: 'failed',
+                        failureReason,
+                        failedAt: new Date().toISOString(),
+                    });
+                    return res.status(500).json({
+                        error: 'Video import completed, but transcription failed',
+                        details: failureReason,
+                    });
+                }
+
+                await Transcript.findByIdAndUpdate(transcript._id, {
+                    status: 'failed',
+                    failureReason: 'Video import failed before transcription could start.',
+                    failedAt: new Date().toISOString(),
+                });
+                return res.status(500).json({
+                    error: 'Failed to download or prepare video for transcription',
+                    details: downloadError.message,
+                });
             }
         } else {
             // For platforms that don't support direct download, return info only

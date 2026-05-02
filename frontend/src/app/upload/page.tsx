@@ -18,6 +18,8 @@ interface Transcript {
   status?: 'uploading' | 'converting' | 'transcribing' | 'completed' | 'failed';
   duration?: number;
   thumbnailUrl?: string;
+  failureReason?: string | null;
+  failedAt?: string | null;
 }
 
 export default function UploadClient() {
@@ -30,6 +32,7 @@ export default function UploadClient() {
   const [importUrl, setImportUrl] = useState('');
   const [importMode, setImportMode] = useState<'file' | 'url'>('file');
   const [isPolling, setIsPolling] = useState(false);
+  const [retryingIds, setRetryingIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
@@ -225,6 +228,28 @@ export default function UploadClient() {
     }
   };
 
+  const handleRetryTranscription = async (id: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    setRetryingIds(prev => ({ ...prev, [id]: true }));
+    setMessage('');
+
+    try {
+      await axios.post(`${API_URL}/clips/retry/${id}`);
+      setMessage('Transcription retry completed. Refreshing transcript status...');
+      const refreshResponse = await axios.get(`${API_URL}/clips/transcripts`);
+      setRecentTranscripts(refreshResponse.data.slice(0, 6));
+      setIsPolling(true);
+    } catch (error: any) {
+      console.error('Error retrying transcription:', error);
+      const errorMessage = error.response?.data?.details || error.response?.data?.error || 'Failed to retry transcription.';
+      setMessage(errorMessage);
+    } finally {
+      setRetryingIds(prev => ({ ...prev, [id]: false }));
+    }
+  };
+
   return (
     <>
       <main className="min-h-screen bg-background p-8">
@@ -368,16 +393,31 @@ export default function UploadClient() {
                         <p className="text-sm text-muted-foreground">
                           Created: {new Date(transcript.createdAt).toLocaleDateString()}
                         </p>
+                        {transcript.status === 'failed' && transcript.failureReason ? (
+                          <p className="text-sm text-red-600">
+                            Video import/download succeeded, but transcription failed. You can retry it.
+                          </p>
+                        ) : null}
                         <Button
                           asChild
                           className="w-full"
-                          variant={!transcript.status || transcript.status === 'completed' ? 'default' : 'secondary'}
-                          disabled={transcript.status && transcript.status !== 'completed'}
+                          variant={!transcript.status || ['completed', 'failed'].includes(transcript.status) ? 'default' : 'secondary'}
+                          disabled={Boolean(transcript.status && ['uploading', 'converting', 'transcribing'].includes(transcript.status))}
                         >
                           <Link href={`/clips/transcripts/${transcript._id}`}>
-                            {!transcript.status || transcript.status === 'completed' ? 'View Details' : 'Processing...'}
+                            {!transcript.status || ['completed', 'failed'].includes(transcript.status) ? 'View Details' : 'Processing...'}
                           </Link>
                         </Button>
+                        {transcript.status === 'failed' && (
+                          <Button
+                            onClick={(e) => handleRetryTranscription(transcript._id, e)}
+                            variant="outline"
+                            className="w-full"
+                            disabled={retryingIds[transcript._id]}
+                          >
+                            {retryingIds[transcript._id] ? 'Retrying...' : 'Retry Transcription'}
+                          </Button>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
