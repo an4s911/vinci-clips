@@ -189,6 +189,7 @@ router.post('/file', upload.single('video'), async (req, res) => {
     }
 
     const transcript = await Transcript.create({
+        userId: req.user.id,
         originalFilename: req.file.originalname,
         transcript: [],
         status: 'uploading',

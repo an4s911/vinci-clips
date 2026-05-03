@@ -13,18 +13,16 @@ const reframeRoutes = require('./reframe');
 const streamerRoutes = require('./streamer');
 const storageRoutes = require('./storage');
 
-
-// Mount specific routes. Order matters for wildcard routes.
-router.use('/upload', uploadRoutes); // Specific route for uploads
-router.use('/import', importRoutes); // Specific route for URL imports
-router.use('/transcripts', transcriptsRoutes); // Specific route for all transcripts and individual transcript by ID
-router.use('/analyze', analyzeRoutes); // Specific route for analysis
-router.use('/clips', clipsRoutes); // Specific route for clips (if any sub-routes are defined in clips.js)
-router.use('/captions', captionsRoutes); // TikTok/Reels style caption generation
-router.use('/reframe', reframeRoutes); // AI-powered video reframing for social media
-router.use('/streamer', streamerRoutes); // Streamer & gameplay video processing
-router.use('/retry', retryRoutes); // Retry failed operations
-router.use('/storage', storageRoutes); // Local media storage maintenance
-router.use('/admin', fixStatusRoutes); // Admin routes for fixing data issues
+router.use('/upload', uploadRoutes);
+router.use('/import', importRoutes);
+router.use('/transcripts', transcriptsRoutes);
+router.use('/analyze', analyzeRoutes);
+router.use('/clips', clipsRoutes);
+router.use('/captions', captionsRoutes);
+router.use('/reframe', reframeRoutes);
+router.use('/streamer', streamerRoutes);
+router.use('/retry', retryRoutes);
+router.use('/storage', storageRoutes);
+router.use('/admin', fixStatusRoutes);
 
 module.exports = router;

@@ -1,18 +1,20 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const session = require('express-session');
+const { RedisStore } = require('connect-redis');
+const { createClient } = require('redis');
 require('dotenv').config();
-
-// The application will now use Application Default Credentials (ADC) in all environments.
-// For local development, authenticate by running `gcloud auth application-default login`.
-// In Cloud Run, the attached service account's identity is used automatically.
 
 const logger = require('./utils/logger');
 const mainRoutes = require('./routes/index');
+const authRoutes = require('./routes/auth');
+const { loadUser, requireAuth } = require('./middleware/auth');
 const { cleanupLocalMedia, getCleanupConfig } = require('./utils/mediaStorage');
 
 const app = express();
 const port = process.env.PORT || 8080;
+
 const configuredCorsOrigins = (process.env.CORS_ORIGIN || '')
     .split(',')
     .map((origin) => origin.trim())
@@ -26,54 +28,76 @@ const allowedOrigins = [
 ];
 
 app.use((req, res, next) => {
-
-  const origin = req.headers.origin;
-
-  if (allowedOrigins.includes(origin)) {
-
-    res.header('Access-Control-Allow-Origin', origin);
-
-  }
-
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-  if (req.method === 'OPTIONS') {
-
-    return res.status(200).end();
-
-  }
-
-  next();
-
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+        res.header('Access-Control-Allow-Origin', origin);
+    }
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+    next();
 });
 
 app.use(cors({
     origin: allowedOrigins,
     credentials: true,
-    exposedHeaders: ['Content-Length', 'X-Content-Length', 'Content-Disposition']
+    exposedHeaders: ['Content-Length', 'X-Content-Length', 'Content-Disposition'],
 }));
 app.use(express.json());
-
-// Add request logging middleware
 app.use(logger.requestMiddleware);
 
-app.get('/health', (req, res) => {
-    res.status(200).json({
-        status: 'healthy',
-        service: 'backend',
-        uptime: process.uptime(),
-    });
-});
-
-// Mount routes
-app.use('/clips', mainRoutes);
-
-// Serve static files from the 'uploads' directory
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
-
 async function startServer() {
+    // Connect Redis for session store
+    const redisClient = createClient({
+        socket: {
+            host: process.env.REDIS_HOST || 'localhost',
+            port: parseInt(process.env.REDIS_PORT || '6379', 10),
+        },
+        password: process.env.REDIS_PASSWORD || undefined,
+    });
+
+    redisClient.on('error', (err) => logger.warn(`Redis session client error: ${err.message}`));
+    await redisClient.connect();
+    logger.info('Redis session client connected.');
+
+    app.use(session({
+        store: new RedisStore({ client: redisClient }),
+        secret: process.env.SESSION_SECRET || 'dev-secret-change-in-production',
+        name: 'vc.sid',
+        resave: false,
+        saveUninitialized: false,
+        cookie: {
+            httpOnly: true,
+            sameSite: 'lax',
+            secure: process.env.NODE_ENV === 'production',
+            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        },
+    }));
+
+    // Attach req.user on every request
+    app.use(loadUser);
+
+    app.get('/health', (req, res) => {
+        res.status(200).json({
+            status: 'healthy',
+            service: 'backend',
+            uptime: process.uptime(),
+        });
+    });
+
+    // Auth routes (login is public; logout/me/change-password check auth internally)
+    app.use('/clips/auth', authRoutes);
+
+    // All other /clips/* routes require authentication
+    app.use('/clips', requireAuth, mainRoutes);
+
+    // Protected media files
+    const uploadsDir = path.join(__dirname, '..', 'uploads');
+    app.use('/uploads', requireAuth, express.static(uploadsDir));
+
     try {
         app.listen(port, () => {
             logger.info(`Server started successfully on port ${port}`);
