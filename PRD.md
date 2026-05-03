@@ -1,8 +1,10 @@
-# 1. Overview
+# Product Requirements
+
+## 1. Overview
 
 Vinci Clips is an AI-powered video clipping platform that automatically generates short, engaging video clips from longer videos with advanced features for social media optimization. The platform supports video uploads, URL imports from major platforms, AI-driven clip analysis, auto-reframing for different aspect ratios, AI-generated B-roll, captioning, and direct social media publishing.
 
-# 2. High-Level Architecture
+## 2. High-Level Architecture
 
 The application is built with a modern, full-stack architecture:
 
@@ -63,7 +65,7 @@ The application is built with a modern, full-stack architecture:
 - **AI-Generated Metadata:** Automatic captions, hashtags, and descriptions
 - **Cross-Platform Optimization:** Format-specific optimizations per platform
 
-# 3. Detailed Feature Specifications
+## 3. Detailed Feature Specifications
 
 ## 3.1. Auto-Reframing Implementation
 
@@ -145,7 +147,7 @@ As a user, I want to import videos from YouTube, Instagram, LinkedIn, Vimeo, and
 - **Video Processing:** Integration with existing upload and processing pipeline
 - **Frontend:** URL input interface with platform detection and preview
 
-# 4. Non-Functional Requirements
+## 4. Non-Functional Requirements
 
 -   **Scalability:** Handle concurrent users and multiple video processing jobs with background queue system
 -   **Reliability:** High availability with robust error handling and automatic retry mechanisms

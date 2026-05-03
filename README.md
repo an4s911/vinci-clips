@@ -4,326 +4,197 @@
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-15.3.5-black)](https://nextjs.org/)
 
-> AI-powered video clipping platform that automatically transforms long-form videos into engaging short clips optimized for social media platforms.
+AI-powered video clipping platform for turning long-form videos into short clips with transcription, AI clip analysis, reframing, captions, and downloadable generated videos.
 
-Vinci Clips is an open-source platform that leverages artificial intelligence to analyze video content, generate accurate transcriptions, and automatically identify the most engaging segments for creating viral short-form content. The platform streamlines the content creation workflow for creators, marketers, and businesses looking to maximize their video content's reach across multiple social media platforms.
-### Watch the Demo Loom On Youtube
-[![Youtube Video](https://github.com/user-attachments/assets/67fafcd0-f0e7-4f29-9a67-b22672c4f6b4)](https://www.youtube.com/watch?v=j6Jo_rcyURE)
-### Demo of one of the Features: Segregate Clips via AI
-<video src="https://github.com/user-attachments/assets/cddfc8f3-b476-4548-adae-00482ba2436f" controls loop></video>
+## What It Does
 
-## Key Features
+- Upload local videos or import supported URLs.
+- Process media with FFmpeg and local filesystem storage.
+- Transcribe audio with Google Gemini.
+- Analyze transcripts and suggest high-signal clips.
+- Generate single-segment or multi-segment clips in background jobs.
+- Track durable processing progress across page reloads.
+- Reframe generated clips for social platforms and add captions.
 
-### Core Functionality
-- **Intelligent Video Analysis**: AI-powered content analysis using Google Gemini API
-- **Automatic Transcription**: Speaker diarization with precise timestamp alignment
-- **Smart Clip Generation**: AI suggests optimal clip segments based on content analysis
-- **Multi-Format Support**: Support for major video formats with automatic conversion
+## Tech Stack
 
+- **Frontend:** Next.js 15, React, TypeScript, Tailwind CSS, shadcn/ui
+- **Backend:** Node.js, Express
+- **Persistence:** Local JSON database at `backend/storage/db.json`
+- **Media:** Local files under `backend/uploads`
+- **AI:** Google Gemini API
+- **Video processing:** FFmpeg, yt-dlp
+- **Docker:** Development and production Compose stacks with nginx, Redis, and Certbot support
 
-### Content Processing
-- **Video-to-Audio Conversion**: High-quality audio extraction using FFmpeg
-- **Thumbnail Generation**: Automatic video thumbnail creation for quick preview
-- **Status Tracking**: Real-time processing status with comprehensive error handling
-- **Batch Processing**: Support for multiple video uploads with queue management
+## Documentation
 
-### User Interface
-- **Intuitive Dashboard**: Clean, responsive interface built with Next.js and Tailwind CSS
-- **Drag-and-Drop Upload**: Simple file upload with progress tracking (up to 2GB)
-- **Video Playback**: Integrated video player with transcript synchronization
-- **Mobile Responsive**: Optimized experience across desktop and mobile devices
+- [docker-setup.md](./docker-setup.md): Docker development, local production build testing, VPS deployment, nginx, environment files, and Certbot.
+- [CONTRIBUTING.md](./CONTRIBUTING.md): Contribution workflow, coding standards, PR guidance, and issue reporting.
+- [PRD.md](./PRD.md): Product requirements and feature direction.
+- [CLAUDE.md](./CLAUDE.md): Agent-oriented architecture notes for Claude/Codex-style coding assistants.
+- [LICENSE](./LICENSE): AGPL-3.0 license.
 
-## Architecture
+## Quick Start With Docker
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │   Backend       │    │   External      │
-│   Next.js       │◄──►│   Express API   │◄──►│   Services      │
-│   React/TS      │    │   Node.js       │    │                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                        │                        │
-         │                        ▼                        │
-         │              ┌─────────────────┐                │
-         │              │   Database      │                │
-         │              │   LocalDB       │                │
-         │              └─────────────────┘                │
-         │                                                 │
-         │              ┌─────────────────┐                │
-         └──────────────│   File Storage  │                │
-                        │   Local system  │                │
-                        └─────────────────┘                │
-                                                           │
-                        ┌─────────────────┐                │
-                        │   AI Services   │◄───────────────┘
-                        │   Gemini API    │
-                        └─────────────────┘
-```
-
-**Technology Stack:**
-- **Frontend**: Next.js 15, React, TypeScript, Tailwind CSS, Shadcn/ui
-- **Backend**: Node.js, Express.js, local JSON-backed persistence
-- **AI/ML**: Google Gemini API for transcription and analysis
-- **Media Processing**: FFmpeg for video/audio conversion and manipulation
-- **Media Storage**: Local filesystem storage, with object storage planned
-- **Infrastructure**: Docker-ready with environment-based configuration
-
-## Getting Started
-
-For Docker-based local development, local production-style testing, and VPS deployment with nginx + Certbot, see [docker-setup.md](./docker-setup.md).
-
-### Prerequisites
-
-Before running Vinci Clips, ensure you have the following installed:
-
-- **Node.js** (version 18.0.0 or higher)
-- **FFmpeg** (installed and available in your system PATH)
-Additionally, you'll and API keys for:
-- **Google Gemini API** (for AI transcription services)
-
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/tryvinci/vinci-clips.git
-   cd vinci-clips
-   ```
-
-2. **Install dependencies**
-   ```bash
-   # Install dependencies for both frontend and backend
-   npm run install:all
-   ```
-
-3. **Configure environment variables**
-   
-   Create a `.env` file in the `backend` directory:
-   ```bash
-   cd backend
-   cp .env.example .env
-   ```
-   
-   Edit `backend/.env` with your actual values:
-   ```env
-   # Server Configuration
-   PORT=8080
-   
-   # AI Services
-   GEMINI_API_KEY=your-gemini-api-key
-   ```
-   
-   **Note**: For Docker deployment, see `docker-setup.md` for different environment configuration.
-
-
-4. **Start the application (install concurrently)**
-   ```bash
-   # Start both frontend and backend
-   npm start
-   
-   # Or start individually:
-   npm run start:backend  # Backend on port 8080
-   npm run start:frontend # Frontend on port 3000
-   ```
-
-5. **Access the application**
-   
-   Open your browser and navigate to `http://localhost:3000`
-
-## Usage
-
-### Basic Workflow
-
-1. **Upload Video**: Drag and drop a video file (up to 2GB) onto the upload interface
-2. **Processing**: The system automatically:
-   - Converts video to audio format
-   - Uploads files to cloud storage
-   - Generates video thumbnails
-   - Creates AI-powered transcription with speaker identification
-3. **Review Transcript**: View the generated transcript with timestamp alignment
-4. **Generate Clips**: Use AI-suggested segments or manually select time ranges for clip creation
-5. **Download Results**: Access generated clips from cloud storage with direct download links
-
-### API Usage
-
-The platform provides a RESTful API for programmatic access:
-
-```javascript
-// Upload a video
-POST /api/upload
-Content-Type: multipart/form-data
-
-// Get transcript status
-GET /api/transcripts/:id
-
-// Generate clip
-POST /api/clips/generate
-{
-  "transcriptId": "...",
-  "startTime": 30,
-  "endTime": 90
-}
-```
-
-For detailed API documentation, see [API Reference](docs/api.md).
-
-## Development
-
-### Project Structure
-
-```
-vinci-clips/
-├── backend/                 # Express.js API server
-│   ├── src/
-│   │   ├── models/         # Local persistence models
-│   │   ├── routes/         # API endpoints
-│   │   └── index.js        # Server entry point
-|   └── storage/db.json     # All your data is stored here
-│   └── uploads             # All your videos are stored here
-│   └── package.json
-├── frontend/               # Next.js application
-│   ├── src/
-│   │   ├── app/           # App router pages
-│   │   ├── components/    # React components
-│   │   └── lib/           # Utility functions
-│   └── package.json
-├── package.json           # Root package.json for scripts
-└── README.md
-```
-
-### Development Commands
+Use Docker for the most reliable setup because it includes FFmpeg, yt-dlp, Redis, frontend, and backend services.
 
 ```bash
-# Development
-npm run dev              # Start both services in development mode
-npm run start:backend    # Start backend only
-npm run start:frontend   # Start frontend only
-
-# Production
-npm run build           # Build both applications
-npm start              # Start both services in production mode
-
-# Testing
-npm test               # Run test suites
-npm run lint           # Run ESLint checks
+cp .env.example .env
 ```
 
-### Testing
+Edit `.env` and set at least:
+
+```env
+GEMINI_API_KEY=your_gemini_key_here
+REDIS_PASSWORD=devredispassword
+NEXT_PUBLIC_API_URL=/api
+CORS_ORIGIN=http://localhost
+NGINX_CONF=./nginx/nginx.conf
+APP_DOMAIN=localhost
+```
+
+Start the development stack:
 
 ```bash
-# Backend tests
-cd backend && npm test
-
-# Frontend tests
-cd frontend && npm test
-
-# End-to-end tests
-npm run test:e2e
+docker compose up --build
 ```
 
-## Deployment
+Open:
 
-### Docker Deployment
+```text
+http://localhost:3000/upload
+```
+
+For production-style local Docker testing and VPS deployment, use [docker-setup.md](./docker-setup.md).
+
+## Manual Local Development
+
+Manual setup is useful when you do not want Docker. You must install Node.js 18+, FFmpeg, and yt-dlp yourself.
 
 ```bash
-# Build and run with Docker Compose
-docker-compose up --build
-
-# Production deployment
-docker-compose -f docker-compose.prod.yml up -d
+npm run install:all
 ```
 
-### Environment Variables
+Backend env:
 
-For local deployment, ensure all environment variables are properly configured:
+```bash
+cp backend/.env.example backend/.env
+```
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `PORT` | Backend server port | No (default: 8080) |
-| `GEMINI_API_KEY` | Google Gemini API key | Yes |
+Frontend env:
 
-## Contributing
+```bash
+printf 'NEXT_PUBLIC_API_URL=http://localhost:8080\n' > frontend/.env.local
+```
 
-We welcome contributions to Vinci Clips! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on:
+Start both services:
 
-- Code of conduct
-- Development workflow
-- Pull request process
-- Issue reporting guidelines
+```bash
+npm run dev
+```
 
-### Development Setup
+Open:
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Add tests for new functionality
-5. Ensure all tests pass (`npm test`)
-6. Commit your changes (`git commit -m 'Add amazing feature'`)
-7. Push to the branch (`git push origin feature/amazing-feature`)
-8. Open a Pull Request
+```text
+http://localhost:3000/upload
+```
 
-## Development Status
+## Common Commands
 
-### Core Platform (Completed)
-- Video upload with drag-and-drop interface (2GB limit)
-- FFmpeg-based video processing and thumbnail generation
-- Local media storage for uploaded and generated files
-- AI transcription using Google Gemini API with speaker diarization
-- Local data persistence with comprehensive status tracking
-- React/Next.js frontend with responsive design
-- Basic clip generation from transcript segments
-- Streamer's Webcam And Gameplay Video into a reel conversion
+```bash
+npm run install:all        # Install backend and frontend dependencies
+npm run dev                # Run backend and frontend locally
+npm run start:backend      # Run backend only
+npm run start:frontend     # Run frontend only
+npm run build              # Build frontend
+```
 
-### Caption System (Recently Added)
-- TikTok/Reels style caption generation with 5 popular styles
-- SRT-based FFmpeg subtitle rendering
-- Word-level timestamp conversion from segment data
-- Caption preview integration in reframe workflow
+Docker:
 
-### Planned Improvements
+```bash
+docker compose up --build
+docker compose logs -f backend frontend
+docker compose down
+```
 
-**High Priority**
-- Enhanced word-level timestamp precision (Issue #19)
-- Advanced caption styles based on social media research (Issue #20)
-- Real-time caption preview with video overlay (Issue #21)
+Local production-style Docker:
 
-**Medium Priority**
-- Intelligent reframing with subject detection (Issue #22)
-- Smooth camera movement for reframed videos (Issue #23)
-- Smart fallback mechanisms for complex scenarios (Issue #24)
+```bash
+docker compose --env-file .env.prod.local -f docker-compose.prod.yml up -d --build nginx frontend backend redis
+```
 
-**Future Enhancements**
-- Speaker-aware caption positioning (Issue #25)
-- LLM-enhanced clip suggestion engine (Issue #26)
-- Performance caching for transcripts and ML models (Issue #27)
-- Modular caption style plugin system (Issue #28)
+## Production Deployment
 
-See [GitHub Issues](https://github.com/tryvinci/vinci-clips/issues) for detailed technical specifications and implementation plans.
+Production deployment is Docker-based and uses nginx as the public reverse proxy. For a fresh VPS with no existing TLS certificate, use the first-time certificate bootstrap flow in [docker-setup.md](./docker-setup.md#vps-production-setup).
+
+High-level flow:
+
+```bash
+cp .env.example .env.prod
+```
+
+Edit `.env.prod` with your real domain, email, Gemini key, Redis password, and HTTPS CORS origin:
+
+```env
+APP_DOMAIN=yourdomain.com
+LETSENCRYPT_EMAIL=you@example.com
+GEMINI_API_KEY=your_key
+REDIS_PASSWORD=strong_random_password
+NEXT_PUBLIC_API_URL=/api
+CORS_ORIGIN=https://yourdomain.com
+```
+
+Then follow [VPS Production Setup](./docker-setup.md#vps-production-setup), which covers:
+
+- Starting nginx with the HTTP config for the initial Let's Encrypt challenge.
+- Issuing the first certificate with Certbot.
+- Switching nginx to HTTPS.
+- Testing automatic certificate renewal.
+- Verifying production health checks.
+
+Production commands must be run with `--env-file .env.prod`; Docker Compose only auto-loads `.env`, not `.env.prod`.
+
+## Environment Files
+
+- `.env`: Default Docker Compose environment file.
+- `.env.example`: Template for Docker Compose environments.
+- `.env.prod.local`: Local production-style Docker test values.
+- `.env.prod`: Recommended VPS production env file created from `.env.example`.
+- `backend/.env`: Used only when running the backend directly outside Docker.
+- `frontend/.env.local`: Used only when running/building the frontend directly outside Docker.
+
+Important: `NEXT_PUBLIC_API_URL` is baked into Next.js production builds. Rebuild the frontend Docker image after changing it.
+
+## Project Layout
+
+```text
+backend/              Express API, localdb, processing routes, uploads
+frontend/             Next.js app and UI components
+nginx/                Local HTTP and production HTTPS nginx configs
+docker-compose.yml    Docker development stack
+docker-compose.prod.yml
+docker-setup.md       Docker, env, VPS, and Certbot guide
+CONTRIBUTING.md       Contribution workflow
+PRD.md                Product requirements
+CLAUDE.md             Agent notes
+```
+
+## Runtime URLs
+
+Docker development:
+
+```text
+Frontend: http://localhost:3000
+Backend:  http://localhost:8080
+```
+
+Local production-style Docker through nginx:
+
+```text
+App: http://localhost/upload
+API: http://localhost/api
+```
 
 ## License
 
-This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See the [LICENSE](LICENSE) file for details.
-
-The AGPL-3.0 license ensures that any modifications or derivatives of this software, including those running on servers, must also be made available under the same license terms.
-
-## Support
-
-### Community Support
-
-- **GitHub Issues**: [Report bugs or request features](https://github.com/tryvinci/vinci-clips/issues)
-- **Discussions**: [Join community discussions](https://github.com/tryvinci/vinci-clips/discussions)
-- **Documentation**: [Read the full documentation](docs/)
-
-### Commercial Support
-
-For enterprise deployments, custom development, or commercial licensing options, please contact us at [support@tryvinci.com](mailto:support@tryvinci.com).
-
-## Acknowledgments
-
-- **Google Gemini API** for powerful AI transcription capabilities
-- **FFmpeg** for reliable video processing
-- **Next.js** and **Vercel** for excellent development experience
-- **LocalDB** for lightweight file-backed storage
-- **Open Source Community** for inspiration and contributions
-
----
-
-Built by the Vinci team. Made possible by the open source community.
+Vinci Clips is licensed under the GNU Affero General Public License v3.0. See [LICENSE](./LICENSE).

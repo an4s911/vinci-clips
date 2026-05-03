@@ -23,7 +23,7 @@ Edit `.env` and fill in your actual values:
 - `GEMINI_API_KEY`: Your Google Gemini API key
 - `REDIS_PASSWORD`: Local Redis password, for example `devredispassword`
 
-**Important**: This `.env` file in the project root is specifically for Docker Compose. For local development without Docker, see `ENVIRONMENT_SETUP.md`.
+**Important**: This `.env` file in the project root is specifically for Docker Compose. For local development without Docker, see the manual setup notes in `README.md`.
 
 ### 2. Start Development Environment
 
