@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import axios from "axios";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
@@ -41,7 +42,16 @@ export default function Header({ className }: { className?: string }) {
         margin: "0 auto",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+      <Link
+        href="/"
+        aria-label="Go to home"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+          textDecoration: "none",
+        }}
+      >
         <img
           src={isDark ? "/logo.png" : "/logo-name-light.png"}
           alt="Vinci"
@@ -58,7 +68,7 @@ export default function Header({ className }: { className?: string }) {
         >
           clips
         </span>
-      </div>
+      </Link>
       <nav style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
         <button
           style={{
