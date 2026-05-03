@@ -1,5 +1,5 @@
 # Backend Dockerfile for Vinci Clips
-FROM node:18-alpine AS base
+FROM node:22-alpine AS base
 
 RUN apk add --no-cache \
     ffmpeg \
@@ -14,13 +14,16 @@ WORKDIR /app
 
 FROM base AS deps
 COPY package*.json ./
+COPY prisma ./prisma
+COPY prisma.config.ts ./
 RUN npm ci
+RUN npx prisma generate
 
 FROM deps AS dev
 ENV NODE_ENV development
 RUN mkdir -p temp cache logs uploads storage
 EXPOSE 8080
-CMD ["npm", "run", "dev"]
+CMD ["sh", "-c", "npx prisma generate && npx prisma migrate deploy && npm run dev"]
 
 FROM deps AS prod-deps
 RUN npm prune --omit=dev
@@ -41,4 +44,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD node -e "require('http').get('http://localhost:8080/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"
 
-CMD ["node", "src/index.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node src/index.js"]

@@ -1,5 +1,24 @@
 services:
-  # Redis for caching (optional, for future use)
+  postgres:
+    image: postgres:18
+    container_name: vinci-clips-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vinci_clips}
+      POSTGRES_USER: ${POSTGRES_USER:-vinci}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpostgrespassword}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - vinci-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vinci} -d ${POSTGRES_DB:-vinci_clips}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   redis:
     image: redis:7-alpine
     container_name: vinci-clips-redis
@@ -21,7 +40,6 @@ services:
     mem_limit: 768m
     cpus: "0.5"
 
-  # Backend API service
   backend:
     build:
       context: ./backend
@@ -33,11 +51,17 @@ services:
       # Server config
       PORT: 8080
       NODE_ENV: development
-      
+
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vinci}:${POSTGRES_PASSWORD:-devpostgrespassword}@postgres:5432/${POSTGRES_DB:-vinci_clips}?schema=public
+
+      # Session
+      SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret-change-in-production}
+
       # Gemini
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       LLM_MODEL: ${LLM_MODEL}
-      
+
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -54,11 +78,13 @@ services:
       - ./backend/cache:/app/cache
       - ./backend/logs:/app/logs
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - vinci-network
 
-  # Frontend Next.js application
   frontend:
     build:
       context: ./frontend
@@ -86,6 +112,8 @@ networks:
     driver: bridge
 
 volumes:
+  postgres_data:
+    driver: local
   redis_data:
     driver: local
   backend_node_modules:

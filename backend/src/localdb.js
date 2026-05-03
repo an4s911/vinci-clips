@@ -1,102 +1,144 @@
-const fs = require('fs');
-const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const prisma = require('./db/prisma');
 
-const dbPath = path.join(__dirname, '..', 'storage', 'db.json');
+// Fields stored as scalar columns in Postgres
+const SCALAR_FIELDS = new Set([
+    'originalFilename', 'videoUrl', 'mp3Url', 'thumbnailUrl', 'duration',
+    'status', 'failureReason', 'platform', 'externalVideoId', 'importUrl', 'userId',
+]);
 
-function attachSaveMethod(document) {
-    if (!document || typeof document !== 'object') {
-        return document;
-    }
+// Fields stored as DateTime columns — convert string → Date for writes
+const DATETIME_FIELDS = new Set(['failedAt']);
 
-    return {
-        ...document,
-        save: async function() {
-            return Transcript.findByIdAndUpdate(this._id, this);
+// Fields stored as JSONB columns
+const JSON_FIELDS = new Set([
+    'transcript', 'clips', 'processingJob', 'analysisMetadata', 'reframeAssets',
+]);
+
+// Fields that must never be written to the DB (metadata, methods, etc.)
+const SKIP_FIELDS = new Set(['_id', 'id', 'createdAt', 'updatedAt', 'save', 'user']);
+
+function toUpdateData(data) {
+    const result = {};
+    for (const [key, value] of Object.entries(data)) {
+        if (SKIP_FIELDS.has(key)) continue;
+        if (SCALAR_FIELDS.has(key)) {
+            result[key] = value;
+        } else if (DATETIME_FIELDS.has(key)) {
+            result[key] = value ? new Date(value) : null;
+        } else if (JSON_FIELDS.has(key)) {
+            // Explicitly include undefined as deletion is not intended; null clears the field
+            result[key] = value === undefined ? undefined : (value ?? null);
         }
+        // Unknown keys are silently ignored
+    }
+    return result;
+}
+
+function toDoc(record) {
+    if (!record) return null;
+    const doc = {
+        _id: record.id,
+        createdAt: record.createdAt instanceof Date ? record.createdAt.toISOString() : record.createdAt,
+        originalFilename: record.originalFilename,
+        videoUrl: record.videoUrl,
+        mp3Url: record.mp3Url,
+        thumbnailUrl: record.thumbnailUrl,
+        duration: record.duration,
+        status: record.status,
+        failureReason: record.failureReason,
+        failedAt: record.failedAt instanceof Date ? record.failedAt.toISOString() : record.failedAt,
+        platform: record.platform,
+        externalVideoId: record.externalVideoId,
+        importUrl: record.importUrl,
+        userId: record.userId,
+        transcript: record.transcript,
+        clips: record.clips,
+        processingJob: record.processingJob,
+        analysisMetadata: record.analysisMetadata,
+        reframeAssets: record.reframeAssets,
     };
-}
-
-function readDb() {
-    const dbDir = path.dirname(dbPath);
-    if (!fs.existsSync(dbDir)) {
-        fs.mkdirSync(dbDir, { recursive: true });
-    }
-    if (!fs.existsSync(dbPath)) {
-        fs.writeFileSync(dbPath, JSON.stringify({ transcripts: [] }));
-    }
-    const data = fs.readFileSync(dbPath);
-    return JSON.parse(data);
-}
-
-function writeDb(data) {
-    fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
+    doc.save = async function () {
+        return Transcript.findByIdAndUpdate(this._id, this);
+    };
+    return doc;
 }
 
 const Transcript = {
     find: async (query = {}) => {
-        const db = readDb();
-        // Simple query handling, can be expanded
-        return db.transcripts.sort((a, b) => {
-            const dateA = a.createdAt ? new Date(a.createdAt) : 0;
-            const dateB = b.createdAt ? new Date(b.createdAt) : 0;
-            return dateB - dateA;
-        }).map(attachSaveMethod);
+        const where = {};
+        if (query.userId) where.userId = query.userId;
+        const records = await prisma.transcript.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+        });
+        return records.map(toDoc);
     },
 
-    findById: async (id) => {
-        const db = readDb();
-        return attachSaveMethod(db.transcripts.find(t => t._id === id));
+    findById: async (id, opts = {}) => {
+        const record = await prisma.transcript.findUnique({ where: { id } });
+        if (!record) return null;
+        if (opts.userId && record.userId !== opts.userId) return null;
+        return toDoc(record);
     },
 
     create: async (data) => {
-        const db = readDb();
-        const newTranscript = { ...data, _id: uuidv4(), createdAt: new Date().toISOString() };
-        db.transcripts.push(newTranscript);
-        writeDb(db);
-        return newTranscript;
+        const createData = toUpdateData(data);
+        if (!createData.userId) {
+            throw new Error('userId is required when creating a transcript');
+        }
+        const record = await prisma.transcript.create({ data: createData });
+        return toDoc(record);
     },
 
     findByIdAndUpdate: async (id, data) => {
-        const db = readDb();
-        const index = db.transcripts.findIndex(t => t._id === id);
-        if (index === -1) return null;
-        db.transcripts[index] = { ...db.transcripts[index], ...data };
-        writeDb(db);
-        return attachSaveMethod(db.transcripts[index]);
+        const updateData = toUpdateData(data);
+        if (Object.keys(updateData).length === 0) {
+            return Transcript.findById(id);
+        }
+        try {
+            const record = await prisma.transcript.update({
+                where: { id },
+                data: updateData,
+            });
+            return toDoc(record);
+        } catch (err) {
+            if (err.code === 'P2025') return null;
+            throw err;
+        }
     },
 
     findByIdAndDelete: async (id) => {
-        const db = readDb();
-        const index = db.transcripts.findIndex(t => t._id === id);
-        if (index === -1) return null;
-        const deleted = db.transcripts.splice(index, 1);
-        writeDb(db);
-        return deleted[0];
+        try {
+            const record = await prisma.transcript.delete({ where: { id } });
+            return toDoc(record);
+        } catch (err) {
+            if (err.code === 'P2025') return null;
+            throw err;
+        }
     },
-    
-    // Add a save method to mimic Mongoose instances
-    save: async function() {
-        return Transcript.findByIdAndUpdate(this._id, this);
-    }
 };
 
-// Helper to create a new transcript object with a save method
+// Mongoose-like constructor — creates an in-memory instance with a .save() method.
+// Used by code that does `new TranscriptModel(data)` then awaits `.save()`.
 const newTranscript = (data) => {
-    const instance = { ...data, _id: uuidv4(), createdAt: new Date().toISOString() };
-    instance.save = async function() {
-        const db = readDb();
-        const index = db.transcripts.findIndex(t => t._id === this._id);
-        if (index !== -1) {
-            db.transcripts[index] = this;
-        } else {
-            db.transcripts.push(this);
+    const instance = {
+        ...data,
+        _id: uuidv4(),
+        createdAt: new Date().toISOString(),
+    };
+    instance.save = async function () {
+        const existing = await Transcript.findById(this._id);
+        if (existing) {
+            return Transcript.findByIdAndUpdate(this._id, this);
         }
-        writeDb(db);
-        return this;
+        const createData = toUpdateData(this);
+        const record = await prisma.transcript.create({
+            data: { ...createData, id: this._id },
+        });
+        return toDoc(record);
     };
     return instance;
 };
-
 
 module.exports = { Transcript, newTranscript };
