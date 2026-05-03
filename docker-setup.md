@@ -187,7 +187,7 @@ NGINX_CONF=./nginx/nginx.http.conf docker compose --env-file .env.prod -f docker
 DNS for `APP_DOMAIN` must already point to the VPS before this command runs.
 
 ```bash
-docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm certbot \
+docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm --entrypoint certbot certbot \
   certonly --webroot \
   -w /var/www/certbot \
   -d "$APP_DOMAIN" \
@@ -207,7 +207,7 @@ The `certbot` service runs an automatic renewal loop. The `nginx` service reload
 ### 6. Test Renewal
 
 ```bash
-docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm certbot renew --dry-run
+docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm --entrypoint certbot certbot renew --dry-run
 ```
 
 This will start:
