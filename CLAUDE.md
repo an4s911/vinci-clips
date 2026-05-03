@@ -8,8 +8,10 @@ Vinci Clips is an AI-powered video clipping tool that automatically generates sh
 
 **Architecture:**
 - **Frontend:** Next.js application with React, TypeScript, and Tailwind CSS
-- **Backend:** Node.js/Express REST API server
-- **Database:** Local JSON-backed persistence through `src/localdb.js`
+- **Backend:** Node.js 22 / Express REST API server
+- **Database:** PostgreSQL 18 via Prisma ORM (schema at `backend/prisma/schema.prisma`)
+- **Auth:** Redis-backed express-session with Argon2 password hashes; single admin user created via CLI
+- **Transcript adapter:** `backend/src/localdb.js` — Prisma-backed drop-in with Mongoose-like API; consumed via `backend/src/models/Transcript.js`
 - **AI Services:** Google Gemini API for transcription and analysis
 - **Media Storage:** Local filesystem storage for video/audio files; Cloudflare R2 support is planned
 - **Video Processing:** FFmpeg for video-to-audio conversion and caption burning
@@ -41,6 +43,19 @@ npm run dev
 
 # Run tests
 npm test
+
+# Generate Prisma client after schema changes
+npm run db:generate
+
+# Apply pending migrations
+npm run db:migrate
+
+# Push schema to DB without migration files (dev shortcut)
+npm run db:push
+
+# Create or reset an admin user
+npm run auth:create-user -- --email admin@example.com --password 'secret'
+npm run auth:create-user -- --email admin@example.com --password 'newsecret' --reset
 ```
 
 ### Frontend Commands (from /frontend directory)
@@ -61,36 +76,55 @@ npm run lint
 ## Key Architecture Patterns
 
 ### Backend Structure
-- **Entry point:** `src/index.js` - Express server setup with CORS and route mounting
-- **Database:** `src/localdb.js` - Local JSON-backed persistence with a Mongoose-like API
-- **Routes:** `src/routes/` - Modular route handlers mounted under `/clips` prefix
+- **Entry point:** `src/index.js` — Express server with session middleware, auth middleware, CORS, and route mounting
+- **Auth middleware:** `src/middleware/auth.js` — `loadUser` (attaches req.user from session) and `requireAuth` (blocks 401)
+- **Auth routes:** `src/routes/auth.js` — login, logout, me, change-password at `/clips/auth/*`
+- **Database client:** `src/db/prisma.js` — singleton PrismaClient
+- **Transcript adapter:** `src/localdb.js` — Prisma-backed with same Mongoose-like API as the old JSON adapter; maps Prisma `id` → `_id` in all responses
+- **Models:** `src/models/Transcript.js` — thin wrapper over localdb
+- **Routes:** `src/routes/` — modular route handlers mounted under `/clips` prefix (all require auth except `/clips/auth/login`)
   - `upload.js` - File upload and processing
-  - `transcripts.js` - Transcript CRUD operations
+  - `import.js` - URL import from supported platforms
+  - `transcripts.js` - Transcript CRUD (userId-scoped)
   - `analyze.js` - AI analysis endpoints
-  - `clips.js` - Clip management
-  - `captions.js` - Caption generation and style management (planned)
-- **Models:** `src/models/` - Local persistence models (e.g., `Transcript.js`)
+  - `clips.js` - Clip management and generation
+  - `captions.js` - Caption generation and style management
+  - `reframe.js` - Video reframing for social platforms
+  - `streamer.js` - Streamer+gameplay composition
+  - `retry-transcription.js` - Retry failed transcriptions
+  - `storage.js` - Storage usage and cleanup (requires MEDIA_ADMIN_TOKEN)
+  - `fix-status.js` - Admin endpoint to fix stuck statuses
+- **Background jobs:** `src/utils/backgroundJobs.js` — async job state management; calls `Transcript.findByIdAndUpdate` without userId (correct, these are internal updates)
+- **Media protection:** `/uploads/*` is served behind `requireAuth` middleware
 - **File Processing:** Uses `fluent-ffmpeg` for video-to-MP3 conversion and caption burning
-- **AI Integration:** Gemini API integration
 
 ### Frontend Structure
 - **App Router:** Uses Next.js 13+ app directory structure
+- **Auth guard:** `src/middleware.ts` — redirects to `/login` if `vc.sid` cookie is absent
+- **Login page:** `src/app/login/page.tsx` — POST to `/clips/auth/login`, stores session cookie
+- **Global auth setup:** `src/components/AuthProvider.tsx` — sets `axios.defaults.withCredentials = true` and installs a 401→/login interceptor
+- **Shell:** `src/components/AppShell.tsx` — conditionally renders Header/Footer (hidden on /login)
+- **API client:** `src/lib/api.ts` — axios instance with `withCredentials: true` and 401 redirect
 - **Main Pages:**
-  - `/` - Video upload interface with drag-and-drop
+  - `/login` - Sign-in form
+  - `/` → redirects to `/upload`
+  - `/upload` - Video upload/import interface
   - `/clips/transcripts` - List all processed videos
   - `/clips/transcripts/[id]` - Individual transcript detail with video player
+  - `/clips/bulk-download` - Select and download multiple clips
 - **Components:** Shadcn/ui components in `src/components/ui/`
 - **Styling:** Tailwind CSS with custom configuration
-- **API Integration:** Axios for HTTP requests to backend
 
 ### Core Workflow
-1. User uploads video via drag-and-drop interface
-2. Backend converts video to MP3 using FFmpeg
-3. Media files are saved under local backend media directories
-4. Gemini API transcribes audio with word-level timestamps and speaker diarization
-5. Transcript data saved through the local persistence layer with precise timing
-6. Frontend displays transcript with video playback
-7. **Caption Generation:** FFmpeg burns styled captions into video clips for social media
+1. User logs in at `/login`; session cookie `vc.sid` set by backend
+2. Authenticated user uploads video via drag-and-drop interface
+3. Backend creates transcript record with `userId: req.user.id`
+4. Backend converts video to MP3 using FFmpeg in background
+5. Media files saved under local backend media directories
+6. Gemini API transcribes audio with word-level timestamps and speaker diarization
+7. Transcript data saved to Postgres through Prisma adapter
+8. Frontend displays transcript with video playback (media served from auth-protected `/uploads/*`)
+9. **Caption Generation:** FFmpeg burns styled captions into video clips for social media
 
 ## Environment Setup
 
@@ -99,11 +133,18 @@ npm run lint
 PORT=8080
 GEMINI_API_KEY=<gemini-api-key>
 LLM_MODEL=gemini-2.5-flash
+DATABASE_URL=postgresql://vinci:password@localhost:5432/vinci_clips?schema=public
+SESSION_SECRET=<openssl rand -base64 48>
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=<password>
 ```
 
 ### Prerequisites
-- Node.js v18+
+- Node.js v22+
 - FFmpeg in system PATH
+- PostgreSQL 18 (or Docker)
+- Redis (or Docker)
 - Gemini API key
 
 ## Development Guidelines
@@ -111,7 +152,19 @@ LLM_MODEL=gemini-2.5-flash
 ### File Path Conventions
 - Frontend imports use `@/` alias pointing to `frontend/src/`
 - All API endpoints prefixed with `/clips/`
-- Backend hardcoded to `http://localhost:8080` in frontend
+- Auth endpoints at `/clips/auth/login`, `/clips/auth/logout`, `/clips/auth/me`, `/clips/auth/change-password`
+- Backend API URL in frontend is `process.env.NEXT_PUBLIC_API_URL`
+
+### Transcript Model Interface
+All backend code accesses transcripts through `require('../models/Transcript')` which wraps `localdb.js`. The Prisma adapter preserves the Mongoose-like interface:
+- `Transcript.find({ userId })` — list transcripts for a user
+- `Transcript.findById(id, { userId })` — get one (returns null if userId mismatch)
+- `Transcript.create({ userId, ...fields })` — userId required
+- `Transcript.findByIdAndUpdate(id, partialData)` — partial update, userId not required
+- `Transcript.findByIdAndDelete(id)` — delete by id
+- Returned docs have `_id` (mapped from Prisma `id`), and a `.save()` method
+
+Background jobs use `findByIdAndUpdate` without userId — this is intentional since jobs are internal and operate on specific IDs.
 
 ### Code Style
 - ESLint with Next.js configuration for frontend
@@ -130,11 +183,12 @@ LLM_MODEL=gemini-2.5-flash
 - Video file upload with progress tracking and status management
 - Video-to-MP3 conversion and cloud storage with thumbnail generation
 - Gemini API transcription with speaker diarization (segment-level timestamps)
-- Transcript storage and retrieval with status tracking
+- Transcript storage and retrieval with status tracking (now in Postgres)
 - AI-powered clip analysis and generation
 - Frontend interfaces for upload, transcript viewing, and clip management
 - Homepage with recent videos and status indicators
 - Comprehensive status management system (uploading → converting → transcribing → completed/failed)
+- **Auth system**: Postgres User table + Argon2 passwords + Redis session store + CLI user creation
 
 ### In Development: TikTok/Reels Caption System
 - **Technical Requirements:**

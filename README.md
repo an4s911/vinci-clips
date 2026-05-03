@@ -1,7 +1,7 @@
 # Vinci Clips
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen)](https://nodejs.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-15.3.5-black)](https://nextjs.org/)
 
 AI-powered video clipping platform for turning long-form videos into short clips with transcription, AI clip analysis, reframing, captions, and downloadable generated videos.
@@ -15,16 +15,18 @@ AI-powered video clipping platform for turning long-form videos into short clips
 - Generate single-segment or multi-segment clips in background jobs.
 - Track durable processing progress across page reloads.
 - Reframe generated clips for social platforms and add captions.
+- Multi-user ready auth with Postgres-backed sessions.
 
 ## Tech Stack
 
 - **Frontend:** Next.js 15, React, TypeScript, Tailwind CSS, shadcn/ui
-- **Backend:** Node.js, Express
-- **Persistence:** Local JSON database at `backend/storage/db.json`
+- **Backend:** Node.js 22, Express
+- **Persistence:** PostgreSQL 18 via Prisma ORM
+- **Sessions:** Redis-backed express-session with HttpOnly cookies
 - **Media:** Local files under `backend/uploads`
 - **AI:** Google Gemini API
 - **Video processing:** FFmpeg, yt-dlp
-- **Docker:** Development and production Compose stacks with nginx, Redis, and Certbot support
+- **Docker:** Development and production Compose stacks with nginx, Redis, Postgres, and Certbot support
 
 ## Documentation
 
@@ -36,7 +38,7 @@ AI-powered video clipping platform for turning long-form videos into short clips
 
 ## Quick Start With Docker
 
-Use Docker for the most reliable setup because it includes FFmpeg, yt-dlp, Redis, frontend, and backend services.
+Use Docker for the most reliable setup because it includes FFmpeg, yt-dlp, Redis, Postgres, frontend, and backend services.
 
 ```bash
 cp .env.example .env
@@ -47,9 +49,10 @@ Edit `.env` and set at least:
 ```env
 GEMINI_API_KEY=your_gemini_key_here
 REDIS_PASSWORD=devredispassword
+POSTGRES_PASSWORD=devpostgrespassword
+SESSION_SECRET=$(openssl rand -base64 48)
 NEXT_PUBLIC_API_URL=/api
 CORS_ORIGIN=http://localhost
-NGINX_CONF=./nginx/nginx.conf
 APP_DOMAIN=localhost
 ```
 
@@ -59,17 +62,23 @@ Start the development stack:
 docker compose up --build
 ```
 
+Create the first admin user:
+
+```bash
+docker compose exec backend npm run auth:create-user -- --email admin@example.com --password 'yourpassword'
+```
+
 Open:
 
 ```text
-http://localhost:3000/upload
+http://localhost:3000/login
 ```
 
 For production-style local Docker testing and VPS deployment, use [docker-setup.md](./docker-setup.md).
 
 ## Manual Local Development
 
-Manual setup is useful when you do not want Docker. You must install Node.js 18+, FFmpeg, and yt-dlp yourself.
+Manual setup requires Node.js 22+, FFmpeg, yt-dlp, a running PostgreSQL 18 instance, and a running Redis instance.
 
 ```bash
 npm run install:all
@@ -79,6 +88,20 @@ Backend env:
 
 ```bash
 cp backend/.env.example backend/.env
+# Edit DATABASE_URL, SESSION_SECRET, REDIS_PASSWORD, GEMINI_API_KEY
+```
+
+Generate Prisma client and run migrations:
+
+```bash
+cd backend
+npx prisma migrate deploy
+```
+
+Create the first admin user:
+
+```bash
+npm run auth:create-user -- --email admin@example.com --password 'yourpassword'
 ```
 
 Frontend env:
@@ -96,7 +119,7 @@ npm run dev
 Open:
 
 ```text
-http://localhost:3000/upload
+http://localhost:3000/login
 ```
 
 ## Common Commands
@@ -117,10 +140,27 @@ docker compose logs -f backend frontend
 docker compose down
 ```
 
+Database and auth (Docker):
+
+```bash
+# Create admin user
+docker compose exec backend npm run auth:create-user -- --email admin@example.com --password 'yourpassword'
+
+# Reset admin password
+docker compose exec backend npm run auth:create-user -- --email admin@example.com --password 'newpassword' --reset
+
+# Run pending migrations manually
+docker compose exec backend npm run db:migrate
+
+# Open Prisma Studio (dev only)
+docker compose exec backend npx prisma studio
+```
+
 Local production-style Docker:
 
 ```bash
-docker compose --env-file .env.prod.local -f docker-compose.prod.yml up -d --build nginx frontend backend redis
+docker compose --env-file .env.prod.local -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.prod.local -f docker-compose.prod.yml exec backend npm run auth:create-user -- --email admin@example.com --password 'yourpassword'
 ```
 
 ## Production Deployment
@@ -133,26 +173,26 @@ High-level flow:
 cp .env.example .env.prod
 ```
 
-Edit `.env.prod` with your real domain, email, Gemini key, Redis password, and HTTPS CORS origin:
+Edit `.env.prod` with your real domain, email, keys, and passwords:
 
 ```env
 APP_DOMAIN=yourdomain.com
 LETSENCRYPT_EMAIL=you@example.com
 GEMINI_API_KEY=your_key
 REDIS_PASSWORD=strong_random_password
+POSTGRES_PASSWORD=strong_random_password
+SESSION_SECRET=strong_random_secret
 NEXT_PUBLIC_API_URL=/api
 CORS_ORIGIN=https://yourdomain.com
 ```
 
-Then follow [VPS Production Setup](./docker-setup.md#vps-production-setup), which covers:
+Then follow [VPS Production Setup](./docker-setup.md#vps-production-setup).
 
-- Starting nginx with the HTTP config for the initial Let's Encrypt challenge.
-- Issuing the first certificate with Certbot.
-- Switching nginx to HTTPS.
-- Testing automatic certificate renewal.
-- Verifying production health checks.
+After starting the stack, create the admin user:
 
-Production commands must be run with `--env-file .env.prod`; Docker Compose only auto-loads `.env`, not `.env.prod`.
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec backend npm run auth:create-user -- --email admin@yourdomain.com --password 'strongpassword'
+```
 
 ## Environment Files
 
@@ -168,11 +208,12 @@ Important: `NEXT_PUBLIC_API_URL` is baked into Next.js production builds. Rebuil
 ## Project Layout
 
 ```text
-backend/              Express API, localdb, processing routes, uploads
-frontend/             Next.js app and UI components
+backend/              Express API, Prisma ORM, auth, processing routes, uploads
+backend/prisma/       Prisma schema and migration files
+frontend/             Next.js app, login page, auth middleware, UI components
 nginx/                Local HTTP and production HTTPS nginx configs
-docker-compose.yml    Docker development stack
-docker-compose.prod.yml
+docker-compose.yml    Docker development stack (Postgres, Redis, backend, frontend)
+docker-compose.prod.yml  Production stack (+ nginx, Certbot)
 docker-setup.md       Docker, env, VPS, and Certbot guide
 CONTRIBUTING.md       Contribution workflow
 PRD.md                Product requirements
@@ -186,13 +227,15 @@ Docker development:
 ```text
 Frontend: http://localhost:3000
 Backend:  http://localhost:8080
+Login:    http://localhost:3000/login
 ```
 
 Local production-style Docker through nginx:
 
 ```text
-App: http://localhost/upload
-API: http://localhost/api
+App:   http://localhost/upload
+API:   http://localhost/api
+Login: http://localhost/login
 ```
 
 ## License
