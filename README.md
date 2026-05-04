@@ -50,11 +50,15 @@ Edit `.env` and set at least:
 GEMINI_API_KEY=your_gemini_key_here
 REDIS_PASSWORD=devredispassword
 POSTGRES_PASSWORD=devpostgrespassword
+POSTGRES_PORT=5433
 SESSION_SECRET=$(openssl rand -base64 48)
 NEXT_PUBLIC_API_URL=/api
 CORS_ORIGIN=http://localhost
 APP_DOMAIN=localhost
 ```
+
+`POSTGRES_PORT` only changes the host port published by Docker Compose. Omit it
+to use the default `5432`.
 
 Start the development stack:
 

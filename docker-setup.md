@@ -46,6 +46,9 @@ reload automatically without rebuilding the images. Rebuild only when
 This will start:
 - **Frontend**: http://localhost:3000
 - **Backend API**: http://localhost:8080
+- **Postgres**: localhost:5432 by default. If your machine already uses port
+  5432, set `POSTGRES_PORT=5433` in the project-root `.env` before starting
+  Docker Compose. Containers still connect to Postgres on `postgres:5432`.
 - **Redis**: localhost:6379, password-protected with `REDIS_PASSWORD`
 
 ### 3. Test Development Environment
