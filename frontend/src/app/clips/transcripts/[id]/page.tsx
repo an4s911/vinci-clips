@@ -93,6 +93,7 @@ export default function TranscriptDetailPage() {
     const [transcript, setTranscript] = useState<Transcript | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [notice, setNotice] = useState('');
     const [analyzing, setAnalyzing] = useState(false);
     const [generatingClips, setGeneratingClips] = useState<{[key: number]: boolean}>({});
     const [generatedClips, setGeneratedClips] = useState<{[key: number]: any}>({});
@@ -232,11 +233,13 @@ export default function TranscriptDetailPage() {
         if (!transcript || cancellingTranscript) return;
         setCancellingTranscript(true);
         setError('');
+        setNotice('');
         try {
             const response = await axios.post(`${API_URL}/clips/transcripts/${transcript._id}/cancel-processing`);
             if (response.data?.transcript) {
                 setTranscript(response.data.transcript);
             }
+            setNotice('Processing was cancelled.');
         } catch (err: any) {
             setError(err.response?.data?.error || 'Failed to cancel transcript processing.');
         } finally {
@@ -396,6 +399,7 @@ export default function TranscriptDetailPage() {
 
         setRetryingTranscript(true);
         setError('');
+        setNotice('');
 
         try {
             await axios.post(`${API_URL}/clips/retry/${transcript._id}`);
@@ -409,7 +413,7 @@ export default function TranscriptDetailPage() {
     };
 
     const hasTranscriptContent = Array.isArray(transcript?.transcript) && transcript.transcript.length > 0;
-    const isFailedWithoutTranscript = transcript?.status === 'failed' && transcript.processingJob?.status !== 'cancelled' && !hasTranscriptContent;
+    const canRetryTranscription = transcript?.status === 'failed' && !hasTranscriptContent && Boolean(transcript.mp3Url);
     const canAnalyzeTranscript = hasTranscriptContent;
 
     if (loading) {
@@ -436,13 +440,22 @@ export default function TranscriptDetailPage() {
                 </CardHeader>
                 <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     <div className="md:col-span-2">
-                        {isFailedWithoutTranscript && (
+                        {notice && (
+                            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                                {notice}
+                            </div>
+                        )}
+                        {canRetryTranscription && (
                             <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-red-900">
                                 <div className="flex items-start gap-3">
                                     <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
                                     <div className="space-y-3">
                                         <div>
-                                            <p className="font-semibold">Video import/download succeeded, but transcription failed.</p>
+                                            <p className="font-semibold">
+                                                {transcript.processingJob?.status === 'cancelled'
+                                                    ? 'Transcription was cancelled.'
+                                                    : 'Video import/download succeeded, but transcription failed.'}
+                                            </p>
                                             <p className="text-sm">{transcript.failureReason || 'Retry transcription to try again.'}</p>
                                         </div>
                                         <Button onClick={retryTranscription} disabled={retryingTranscript}>
@@ -473,11 +486,6 @@ export default function TranscriptDetailPage() {
                                         {cancellingTranscript || transcript.processingJob.status === 'cancelling' ? 'Stopping...' : 'Stop'}
                                     </Button>
                                 </div>
-                            </div>
-                        )}
-                        {transcript.processingJob?.status === 'cancelled' && (
-                            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                                Processing was cancelled.
                             </div>
                         )}
                         {transcript && transcript.videoUrl && (

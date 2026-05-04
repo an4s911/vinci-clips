@@ -243,6 +243,7 @@ export default function UploadClient() {
       if (response.data?.transcript) {
         setRecentTranscripts(prev => prev.map(t => t._id === id ? response.data.transcript : t));
       }
+      setMessage('Processing was cancelled.');
       setIsPolling(true);
     } catch (error: any) {
       setMessage(error.response?.data?.error || 'Failed to cancel processing.');
@@ -438,9 +439,6 @@ export default function UploadClient() {
                             <div className="font-medium">{formatPhase(transcript.processingJob.phase)}</div>
                             <div className="text-muted-foreground">{transcript.processingJob.progressMessage}</div>
                           </div>
-                        ) : null}
-                        {transcript.processingJob?.status === 'cancelled' ? (
-                          <p className="text-sm text-amber-700">Processing cancelled.</p>
                         ) : null}
                         {transcript.status === 'failed' && transcript.processingJob?.status !== 'cancelled' && transcript.failureReason ? (
                           <p className="text-sm text-red-600">
