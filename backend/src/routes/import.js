@@ -103,7 +103,7 @@ async function downloadYouTubeVideo(transcriptId, url, outputPath) {
         file: 'yt-dlp',
         args: [
             '--no-playlist',
-            '--format', 'bv*+ba/b',
+            '--format', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
             '--merge-output-format', 'mp4',
             '--output', outputPath,
             url
