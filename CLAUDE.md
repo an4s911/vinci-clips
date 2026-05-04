@@ -133,12 +133,17 @@ npm run lint
 PORT=8080
 GEMINI_API_KEY=<gemini-api-key>
 LLM_MODEL=gemini-2.5-flash
+CHUNK_DURATION_SEC=180
+CHUNK_OVERLAP_SEC=20
+CHUNK_CONCURRENCY=1
 DATABASE_URL=postgresql://vinci:password@localhost:5432/vinci_clips?schema=public
 SESSION_SECRET=<openssl rand -base64 48>
 REDIS_HOST=localhost
 REDIS_PORT=6379
 REDIS_PASSWORD=<password>
 ```
+
+For higher transcription usage, use `CHUNK_DURATION_SEC=300`, `CHUNK_OVERLAP_SEC=30`, and `CHUNK_CONCURRENCY=4`.
 
 ### Prerequisites
 - Node.js v22+

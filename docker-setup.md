@@ -101,6 +101,9 @@ LLM_MODEL=gemini-2.5-flash
 REDIS_PASSWORD=localredispassword
 NEXT_PUBLIC_API_URL=/api
 CORS_ORIGIN=http://localhost
+CHUNK_DURATION_SEC=180
+CHUNK_OVERLAP_SEC=20
+CHUNK_CONCURRENCY=1
 ```
 
 ### 2. Prepare Local Persistent Directories
@@ -163,6 +166,22 @@ LLM_MODEL=gemini-2.5-flash
 REDIS_PASSWORD=strong_random_password
 NEXT_PUBLIC_API_URL=/api
 CORS_ORIGIN=https://yourdomain.com
+```
+
+For Gemini free tier or constrained deployments, use:
+
+```env
+CHUNK_DURATION_SEC=180
+CHUNK_OVERLAP_SEC=20
+CHUNK_CONCURRENCY=1
+```
+
+For higher usage, use:
+
+```env
+CHUNK_DURATION_SEC=300
+CHUNK_OVERLAP_SEC=30
+CHUNK_CONCURRENCY=4
 ```
 
 ### 2. Prepare Persistent Directories

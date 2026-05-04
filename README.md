@@ -186,6 +186,22 @@ NEXT_PUBLIC_API_URL=/api
 CORS_ORIGIN=https://yourdomain.com
 ```
 
+For Gemini free tier or constrained deployments, use:
+
+```env
+CHUNK_DURATION_SEC=180
+CHUNK_OVERLAP_SEC=20
+CHUNK_CONCURRENCY=1
+```
+
+For higher usage, use:
+
+```env
+CHUNK_DURATION_SEC=300
+CHUNK_OVERLAP_SEC=30
+CHUNK_CONCURRENCY=4
+```
+
 Then follow [VPS Production Setup](./docker-setup.md#vps-production-setup).
 
 After starting the stack, create the admin user:
@@ -204,6 +220,26 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml exec backend npm 
 - `frontend/.env.local`: Used only when running/building the frontend directly outside Docker.
 
 Important: `NEXT_PUBLIC_API_URL` is baked into Next.js production builds. Rebuild the frontend Docker image after changing it.
+
+## Transcription Chunking
+
+Long audio is split into overlapping chunks before Gemini transcription. Lower concurrency is safer for Gemini free tier; higher concurrency is faster but can trigger rate limits or `503` high-demand errors.
+
+Free tier or constrained deployments:
+
+```env
+CHUNK_DURATION_SEC=180
+CHUNK_OVERLAP_SEC=20
+CHUNK_CONCURRENCY=1
+```
+
+Higher usage:
+
+```env
+CHUNK_DURATION_SEC=300
+CHUNK_OVERLAP_SEC=30
+CHUNK_CONCURRENCY=4
+```
 
 ## Project Layout
 
