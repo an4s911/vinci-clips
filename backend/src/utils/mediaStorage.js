@@ -310,6 +310,52 @@ async function deleteTranscriptMedia(transcript) {
     return results;
 }
 
+async function deleteTranscriptTransientMedia(transcriptId, options = {}) {
+    const id = String(transcriptId || '').trim();
+    if (!id || id.includes('/') || id.includes('\\')) return [];
+
+    const importsRoot = options.importsRoot || path.join(BACKEND_ROOT, 'uploads', 'imports');
+    const prefixes = [`${id}.`, `${id}_`];
+    const results = [];
+
+    let entries;
+    try {
+        entries = await fs.promises.readdir(importsRoot, { withFileTypes: true });
+    } catch (error) {
+        if (error.code === 'ENOENT') return results;
+        throw error;
+    }
+
+    for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        if (!prefixes.some((prefix) => entry.name.startsWith(prefix))) continue;
+
+        const mediaPath = path.join(importsRoot, entry.name);
+        try {
+            await fs.promises.unlink(mediaPath);
+            results.push({ input: mediaPath, path: mediaPath, deleted: true });
+        } catch (error) {
+            if (error.code === 'ENOENT') {
+                results.push({ input: mediaPath, path: mediaPath, deleted: false, reason: 'missing' });
+            } else {
+                logger.warn(`Failed to delete transient media file: ${error.message}`, { transcriptId: id, path: mediaPath });
+                results.push({ input: mediaPath, path: mediaPath, deleted: false, reason: error.message });
+            }
+        }
+    }
+
+    const deletedCount = results.filter((item) => item.deleted).length;
+    if (deletedCount > 0) {
+        logger.info('Deleted transient transcript media files.', {
+            transcriptId: id,
+            deletedCount,
+            paths: results.filter((item) => item.deleted).map((item) => item.path),
+        });
+    }
+
+    return results;
+}
+
 module.exports = {
     BACKEND_ROOT,
     MEDIA_ROOTS,
@@ -318,6 +364,7 @@ module.exports = {
     collectTranscriptMediaReferences,
     deleteLocalMedia,
     deleteTranscriptMedia,
+    deleteTranscriptTransientMedia,
     getCleanupConfig,
     getStorageUsage,
     mediaUrlForPath,

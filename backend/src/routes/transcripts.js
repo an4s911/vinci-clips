@@ -6,7 +6,7 @@ const {
     normalizeTranscriptClips
 } = require('../utils/clipVideos');
 const { requestTranscriptCancel } = require('../utils/backgroundJobs');
-const { deleteTranscriptMedia } = require('../utils/mediaStorage');
+const { deleteTranscriptMedia, deleteTranscriptTransientMedia } = require('../utils/mediaStorage');
 
 const router = express.Router();
 
@@ -93,7 +93,10 @@ router.delete('/:id', async (req, res) => {
             return res.status(404).json({ message: 'Transcript not found' });
         }
 
-        const deletedMedia = await deleteTranscriptMedia(transcript);
+        const deletedMedia = [
+            ...await deleteTranscriptMedia(transcript),
+            ...await deleteTranscriptTransientMedia(id),
+        ];
         await Transcript.findByIdAndDelete(id);
 
         res.status(200).json({

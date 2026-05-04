@@ -15,7 +15,7 @@ const {
     runTrackedFile,
     startTranscriptWorker,
 } = require('../utils/backgroundJobs');
-const { deleteLocalMedia } = require('../utils/mediaStorage');
+const { deleteLocalMedia, deleteTranscriptTransientMedia } = require('../utils/mediaStorage');
 
 const router = express.Router();
 const execOptions = { maxBuffer: 20 * 1024 * 1024 };
@@ -240,6 +240,7 @@ async function processUrlImport({ transcriptId, url, platform }) {
             deleteLocalMedia(videoPath, { missingOk: true }),
             deleteLocalMedia(mp3Path, { missingOk: true }),
             deleteLocalMedia(thumbnailPath, { missingOk: true }),
+            deleteTranscriptTransientMedia(transcriptId),
         ]);
     }
 }

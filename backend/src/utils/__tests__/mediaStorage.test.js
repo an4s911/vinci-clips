@@ -14,6 +14,7 @@ const {
     BACKEND_ROOT,
     cleanupLocalMedia,
     collectTranscriptMediaReferences,
+    deleteTranscriptTransientMedia,
     resolveLocalMediaPath,
 } = require('../mediaStorage');
 
@@ -117,5 +118,31 @@ describe('mediaStorage', () => {
         expect(result.deleted[0].path).toBe(staleFile);
         await expect(fs.promises.access(referencedFile)).resolves.toBeUndefined();
         await expect(fs.promises.access(staleFile)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    test('deletes transient import files for a transcript id', async () => {
+        const importsDir = path.join(testRoot, 'uploads', 'imports');
+        const transcriptId = `transient-test-${Date.now()}`;
+        const partFile = path.join(importsDir, `${transcriptId}.mp4.webm.part`);
+        const mp3File = path.join(importsDir, `${transcriptId}.mp4.mp3`);
+        const unrelatedFile = path.join(importsDir, `${transcriptId}other.mp4.webm.part`);
+
+        await fs.promises.mkdir(importsDir, { recursive: true });
+        await fs.promises.writeFile(partFile, 'partial');
+        await fs.promises.writeFile(mp3File, 'audio');
+        await fs.promises.writeFile(unrelatedFile, 'unrelated');
+
+        try {
+            const result = await deleteTranscriptTransientMedia(transcriptId, { importsRoot: importsDir });
+
+            expect(result.filter((item) => item.deleted)).toHaveLength(2);
+            await expect(fs.promises.access(partFile)).rejects.toMatchObject({ code: 'ENOENT' });
+            await expect(fs.promises.access(mp3File)).rejects.toMatchObject({ code: 'ENOENT' });
+            await expect(fs.promises.access(unrelatedFile)).resolves.toBeUndefined();
+        } finally {
+            await fs.promises.rm(partFile, { force: true });
+            await fs.promises.rm(mp3File, { force: true });
+            await fs.promises.rm(unrelatedFile, { force: true });
+        }
     });
 });
