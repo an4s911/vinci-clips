@@ -15,6 +15,10 @@ const { cleanupLocalMedia, getCleanupConfig } = require('./utils/mediaStorage');
 const app = express();
 const port = process.env.PORT || 8080;
 
+if (process.env.NODE_ENV === 'production') {
+    app.set('trust proxy', 1);
+}
+
 const configuredCorsOrigins = (process.env.CORS_ORIGIN || '')
     .split(',')
     .map((origin) => origin.trim())
