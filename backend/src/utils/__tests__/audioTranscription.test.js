@@ -7,11 +7,59 @@ jest.mock('../backgroundJobs', () => ({
 }));
 
 const {
+    getPromotedModelOrder,
     offsetAndFilterWords,
     runChunksWithLimit,
 } = require('../audioTranscription');
 
 describe('audioTranscription', () => {
+    describe('getPromotedModelOrder', () => {
+        test('promotes fallback only after two failed attempts from the current first model', () => {
+            const order = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+            const attempts = [
+                { model: 'gemini-2.5-flash', attempt: 1, success: false },
+                { model: 'gemini-2.5-flash', attempt: 2, success: false },
+                { model: 'gemini-2.5-flash-lite', attempt: 1, success: true },
+            ];
+
+            expect(getPromotedModelOrder(order, attempts)).toEqual([
+                'gemini-2.5-flash-lite',
+                'gemini-2.5-flash',
+                'gemini-2.0-flash',
+            ]);
+        });
+
+        test('does not promote after one failure', () => {
+            const order = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+            const attempts = [
+                { model: 'gemini-2.5-flash', attempt: 1, success: false },
+                { model: 'gemini-2.5-flash-lite', attempt: 1, success: true },
+            ];
+
+            expect(getPromotedModelOrder(order, attempts)).toBe(order);
+        });
+
+        test('does not duplicate models when promoting', () => {
+            const order = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+            const attempts = [
+                { model: 'gemini-2.5-flash', attempt: 1, success: false },
+                { model: 'gemini-2.5-flash', attempt: 2, success: false },
+                { model: 'gemini-2.5-flash-lite', attempt: 1, success: true },
+            ];
+
+            expect(getPromotedModelOrder(order, attempts)).toEqual(['gemini-2.5-flash-lite', 'gemini-2.5-flash']);
+        });
+
+        test('preserves configured model order when no promotion condition is met', () => {
+            const order = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+            const attempts = [
+                { model: 'gemini-2.5-flash', attempt: 1, success: true },
+            ];
+
+            expect(getPromotedModelOrder(order, attempts)).toBe(order);
+        });
+    });
+
     describe('offsetAndFilterWords', () => {
         test('keeps only words owned by a half-open chunk range and offsets timestamps', () => {
             const stepMs = 270000;

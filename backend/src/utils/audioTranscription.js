@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleAIFileManager } = require('@google/generative-ai/server');
-const { generateJsonContent } = require('./gemini');
+const { generateJsonContent, getModelCandidates } = require('./gemini');
 const {
     TRANSCRIPTION_PROMPT,
     TRANSCRIPTION_SCHEMA,
@@ -105,15 +105,90 @@ async function splitAudio(mp3Path, outDir, { durationSec, stepSec, totalDuration
     return chunks;
 }
 
-async function transcribeChunk({ genAI, fileManager, chunkPath, transcriptId, logLabel }) {
+function getPromotedModelOrder(modelOrder, attempts) {
+    if (!Array.isArray(modelOrder) || modelOrder.length < 2 || !Array.isArray(attempts)) {
+        return modelOrder;
+    }
+
+    const firstModel = modelOrder[0];
+    const successfulFallback = attempts.find((attempt) => attempt?.success && attempt.model !== firstModel);
+    if (!successfulFallback) {
+        return modelOrder;
+    }
+
+    const firstModelFailedBothAttempts = [1, 2].every((attemptNumber) => attempts.some((attempt) => (
+        attempt?.model === firstModel
+        && attempt.attempt === attemptNumber
+        && attempt.success === false
+    )));
+
+    if (!firstModelFailedBothAttempts) {
+        return modelOrder;
+    }
+
+    return [
+        successfulFallback.model,
+        ...modelOrder.filter((model) => model !== successfulFallback.model),
+    ];
+}
+
+function logGeminiAttemptEvent({ transcriptId, jobType, chunkIndex, chunkCount, event }) {
+    const baseMetadata = {
+        jobType,
+        phase: 'transcribe',
+        chunkIndex,
+        chunkCount,
+    };
+
+    if (event.event === 'attempt_started') {
+        logVideoProcessing(transcriptId, 'running', 'Gemini transcription attempt started', {
+            ...baseMetadata,
+            model: event.model,
+            attempt: event.attempt,
+        });
+    } else if (event.event === 'attempt_failed') {
+        logVideoProcessing(transcriptId, 'warning', 'Gemini transcription attempt failed', {
+            ...baseMetadata,
+            model: event.model,
+            attempt: event.attempt,
+            status: event.status,
+            code: event.code,
+            retryable: event.retryable,
+            message: event.message,
+        });
+    } else if (event.event === 'retry_sleep') {
+        logVideoProcessing(transcriptId, 'running', 'Gemini transcription retry scheduled', {
+            ...baseMetadata,
+            model: event.model,
+            attempt: event.attempt,
+            delayMs: event.delayMs,
+        });
+    } else if (event.event === 'model_switch') {
+        logVideoProcessing(transcriptId, 'running', 'Gemini transcription model switch', {
+            ...baseMetadata,
+            exhaustedModel: event.exhaustedModel,
+            nextModel: event.nextModel,
+        });
+    } else if (event.event === 'attempt_succeeded') {
+        logVideoProcessing(transcriptId, 'completed', 'Gemini transcription attempt succeeded', {
+            ...baseMetadata,
+            model: event.model,
+            attempt: event.attempt,
+        });
+    }
+}
+
+async function transcribeChunk({ genAI, fileManager, chunkPath, transcriptId, logLabel, modelCandidates, onAttemptEvent }) {
     const uploadResult = await fileManager.uploadFile(chunkPath, {
         mimeType: 'audio/mpeg',
         displayName: path.basename(chunkPath),
     });
     const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
-    const { data, model } = await generateJsonContent({
+    const { data, model, attempts } = await generateJsonContent({
         genAI,
         logLabel,
+        modelCandidates,
+        onAttemptEvent,
         contents: [{
             role: 'user',
             parts: [
@@ -128,7 +203,7 @@ async function transcribeChunk({ genAI, fileManager, chunkPath, transcriptId, lo
         throw new Error(`Gemini returned a non-array transcript for ${transcriptId}.`);
     }
 
-    return { words: data, model };
+    return { words: data, model, attempts };
 }
 
 function offsetAndFilterWords(words, chunkIndex, isLast, stepMs) {
@@ -236,20 +311,51 @@ async function transcribeAudioFile({
         await assertTranscriptNotCancelled(transcriptId, jobType);
         await onPhaseChange?.('transcribe', `Transcribing ${chunks.length} audio chunks with Gemini.`);
         const stepMs = config.stepSec * 1000;
+        let modelOrder = getModelCandidates();
         const chunkResults = await runChunksWithLimit(chunks, config.concurrency, async (chunk) => {
             await assertTranscriptNotCancelled(transcriptId, jobType);
+            const chunkModelOrder = [...modelOrder];
             try {
+                logVideoProcessing(transcriptId, 'running', 'Gemini chunk transcription started', {
+                    jobType,
+                    phase: 'transcribe',
+                    chunkIndex: chunk.index,
+                    chunkCount: chunks.length,
+                    modelCandidates: chunkModelOrder,
+                });
                 const result = await transcribeChunk({
                     genAI,
                     fileManager,
                     chunkPath: chunk.path,
                     transcriptId,
                     logLabel: `${logLabel} chunk ${chunk.index + 1}/${chunks.length}`,
+                    modelCandidates: chunkModelOrder,
+                    onAttemptEvent: (event) => logGeminiAttemptEvent({
+                        transcriptId,
+                        jobType,
+                        chunkIndex: chunk.index,
+                        chunkCount: chunks.length,
+                        event,
+                    }),
                 });
+                const promotedModelOrder = getPromotedModelOrder(chunkModelOrder, result.attempts);
+                if (promotedModelOrder[0] !== chunkModelOrder[0] && modelOrder[0] === chunkModelOrder[0]) {
+                    logVideoProcessing(transcriptId, 'running', 'Gemini transcription model promoted', {
+                        jobType,
+                        phase: 'transcribe',
+                        chunkIndex: chunk.index,
+                        chunkCount: chunks.length,
+                        previousFirstModel: chunkModelOrder[0],
+                        promotedModel: promotedModelOrder[0],
+                        modelCandidates: promotedModelOrder,
+                    });
+                    modelOrder = promotedModelOrder;
+                }
                 logVideoProcessing(transcriptId, 'completed', 'Gemini chunk transcription completed', {
                     jobType,
                     phase: 'transcribe',
                     chunkIndex: chunk.index,
+                    chunkCount: chunks.length,
                     wordCount: result.words.length,
                     model: result.model,
                 });
@@ -282,6 +388,7 @@ module.exports = {
     TRANSCRIPTION_PROMPT,
     TRANSCRIPTION_SCHEMA,
     getAudioDurationSec,
+    getPromotedModelOrder,
     offsetAndFilterWords,
     runChunksWithLimit,
     splitAudio,

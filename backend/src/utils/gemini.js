@@ -19,6 +19,20 @@ const getModelCandidates = () => {
 const shouldRetryModel = (error) => [429, 500, 503].includes(error?.status);
 const shouldTryNextModel = (error) => [400, 404, 429, 500, 503].includes(error?.status);
 const isParseFailure = (error) => error?.code === 'TRANSCRIPTION_PARSE_FAILED';
+const shortErrorMessage = (error) => String(error?.message || 'Unknown Gemini error.').slice(0, 300);
+
+function buildAttemptFailure(modelName, attempt, error) {
+    return {
+        event: 'attempt_failed',
+        model: modelName,
+        attempt,
+        success: false,
+        status: error?.status,
+        code: error?.code,
+        retryable: shouldRetryModel(error) || isParseFailure(error),
+        message: shortErrorMessage(error),
+    };
+}
 
 function buildJsonParseError(rawText, reason) {
     const error = new Error(reason);
@@ -39,14 +53,34 @@ function parseJsonResponse(rawText) {
     }
 }
 
-async function generateJsonContent({ genAI, contents, responseSchema, safetySettings, logLabel = 'Gemini request' }) {
+async function generateJsonContent({
+    genAI,
+    contents,
+    responseSchema,
+    safetySettings,
+    logLabel = 'Gemini request',
+    modelCandidates,
+    onAttemptEvent,
+    retryDelayMs = 1500,
+}) {
+    const providedCandidates = Array.isArray(modelCandidates)
+        ? [...new Set(modelCandidates.filter(Boolean))]
+        : [];
+    const candidates = providedCandidates.length > 0 ? providedCandidates : getModelCandidates();
     const attemptedModels = [];
+    const attempts = [];
     let lastError = null;
 
-    for (const modelName of getModelCandidates()) {
+    for (const modelName of candidates) {
         attemptedModels.push(modelName);
 
         for (let attempt = 1; attempt <= 2; attempt += 1) {
+            onAttemptEvent?.({
+                event: 'attempt_started',
+                model: modelName,
+                attempt,
+            });
+
             try {
                 const model = genAI.getGenerativeModel({ model: modelName });
                 const result = await model.generateContent({
@@ -60,23 +94,52 @@ async function generateJsonContent({ genAI, contents, responseSchema, safetySett
                 });
 
                 const response = await result.response;
-                return {
-                    data: parseJsonResponse(response.text()),
+                const data = parseJsonResponse(response.text());
+                const success = {
+                    event: 'attempt_succeeded',
                     model: modelName,
+                    attempt,
+                    success: true,
+                };
+                attempts.push(success);
+                onAttemptEvent?.(success);
+                return {
+                    data,
+                    model: modelName,
+                    attempts,
                 };
             } catch (error) {
                 lastError = error;
+                const failure = buildAttemptFailure(modelName, attempt, error);
+                attempts.push(failure);
+                onAttemptEvent?.(failure);
                 console.warn(`${logLabel} failed with model ${modelName} on attempt ${attempt}:`, error.message);
 
                 if ((shouldRetryModel(error) || isParseFailure(error)) && attempt < 2) {
-                    await sleep(1500 * attempt);
+                    const delayMs = retryDelayMs * attempt;
+                    onAttemptEvent?.({
+                        event: 'retry_sleep',
+                        model: modelName,
+                        attempt,
+                        delayMs,
+                    });
+                    await sleep(delayMs);
                     continue;
                 }
 
                 if (shouldTryNextModel(error) || isParseFailure(error)) {
+                    const nextModel = candidates[candidates.indexOf(modelName) + 1];
+                    if (nextModel) {
+                        onAttemptEvent?.({
+                            event: 'model_switch',
+                            exhaustedModel: modelName,
+                            nextModel,
+                        });
+                    }
                     break;
                 }
 
+                error.attempts = attempts;
                 throw error;
             }
         }
@@ -84,6 +147,7 @@ async function generateJsonContent({ genAI, contents, responseSchema, safetySett
 
     const error = new Error(`All Gemini models failed: ${attemptedModels.join(', ')}`);
     error.cause = lastError;
+    error.attempts = attempts;
     throw error;
 }
 
