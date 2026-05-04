@@ -4,12 +4,8 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const Transcript = require('../models/Transcript');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { GoogleAIFileManager } = require('@google/generative-ai/server');
-const { generateJsonContent } = require('../utils/gemini');
+const { transcribeAudioFile } = require('../utils/audioTranscription');
 const {
-    TRANSCRIPTION_PROMPT,
-    TRANSCRIPTION_SCHEMA,
     assertTranscriptNotCancelled,
     completeTranscriptJob,
     createJobState,
@@ -133,28 +129,12 @@ async function processUploadedFile({ transcriptId, originalName, videoPath }) {
     });
 
     await assertTranscriptNotCancelled(transcriptId, jobType);
-    await markTranscriptPhase(transcriptId, jobType, 'upload-gemini', 'Uploading audio to Gemini.', { mp3FileName });
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY);
-    const uploadResult = await fileManager.uploadFile(mp3DestPath, {
-        mimeType: 'audio/mpeg',
-        displayName: mp3FileName
-    });
-
-    await assertTranscriptNotCancelled(transcriptId, jobType);
-    await markTranscriptPhase(transcriptId, jobType, 'transcribe', 'Transcribing audio with Gemini.', { mp3FileName });
-    const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
-    const { data: transcriptContent, model: resolvedModel } = await generateJsonContent({
-        genAI,
+    const { transcript: transcriptContent, model: resolvedModel } = await transcribeAudioFile({
+        mp3Path: mp3DestPath,
+        transcriptId,
+        jobType,
         logLabel: `Upload transcription for ${transcriptId}`,
-        contents: [{
-            role: 'user',
-            parts: [
-                { text: TRANSCRIPTION_PROMPT },
-                audioPart,
-            ],
-        }],
-        responseSchema: TRANSCRIPTION_SCHEMA,
+        onPhaseChange: (phase, message, extra = {}) => markTranscriptPhase(transcriptId, jobType, phase, message, extra),
     });
 
     await assertTranscriptNotCancelled(transcriptId, jobType);

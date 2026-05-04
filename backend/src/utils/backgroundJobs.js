@@ -43,7 +43,7 @@ function createJobState({ status = 'queued', phase, progressMessage, error = nul
 
 function transcriptStatusForPhase(phase, fallback = 'uploading') {
     if (phase === 'convert-mp3' || phase === 'persist-files' || phase === 'thumbnail') return 'converting';
-    if (phase === 'upload-gemini' || phase === 'transcribe' || phase === 'resolve-mp3') return 'transcribing';
+    if (phase === 'upload-gemini' || phase === 'transcribe' || phase === 'resolve-mp3' || phase === 'probe-audio-duration' || phase === 'split-audio' || phase === 'merge-transcript') return 'transcribing';
     if (phase === 'completed') return 'completed';
     return fallback;
 }

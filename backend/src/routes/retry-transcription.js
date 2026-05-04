@@ -1,13 +1,9 @@
 const express = require('express');
 const Transcript = require('../models/Transcript');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { GoogleAIFileManager } = require('@google/generative-ai/server');
 const fs = require('fs');
 const path = require('path');
-const { generateJsonContent } = require('../utils/gemini');
+const { transcribeAudioFile } = require('../utils/audioTranscription');
 const {
-    TRANSCRIPTION_PROMPT,
-    TRANSCRIPTION_SCHEMA,
     assertTranscriptNotCancelled,
     completeTranscriptJob,
     createJobState,
@@ -40,39 +36,18 @@ async function runRetryTranscription(transcriptId, mp3Path) {
         mp3FileName: path.basename(mp3Path),
     });
 
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY);
-
     await assertTranscriptNotCancelled(transcriptId, jobType);
-    await markTranscriptPhase(transcriptId, jobType, 'upload-gemini', 'Uploading saved MP3 to Gemini.', {
-        mp3FileName: path.basename(mp3Path),
-    });
-    const uploadResult = await fileManager.uploadFile(mp3Path, {
-        mimeType: 'audio/mpeg',
-        displayName: path.basename(mp3Path)
-    });
-
-    await assertTranscriptNotCancelled(transcriptId, jobType);
-    await markTranscriptPhase(transcriptId, jobType, 'transcribe', 'Retrying Gemini transcription.', {
-        mp3FileName: path.basename(mp3Path),
-    });
-    const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
-    const result = await generateJsonContent({
-        genAI,
+    const result = await transcribeAudioFile({
+        mp3Path,
+        transcriptId,
+        jobType,
         logLabel: `Retry transcription for ${transcriptId}`,
-        contents: [{
-            role: 'user',
-            parts: [
-                { text: TRANSCRIPTION_PROMPT },
-                audioPart,
-            ],
-        }],
-        responseSchema: TRANSCRIPTION_SCHEMA,
+        onPhaseChange: (phase, message, extra = {}) => markTranscriptPhase(transcriptId, jobType, phase, message, extra),
     });
 
     await assertTranscriptNotCancelled(transcriptId, jobType);
     await Transcript.findByIdAndUpdate(transcriptId, {
-        transcript: result.data,
+        transcript: result.transcript,
         failureReason: null,
         failedAt: null,
     });
@@ -80,7 +55,7 @@ async function runRetryTranscription(transcriptId, mp3Path) {
         jobType,
         phase: 'transcribe',
         model: result.model,
-        wordCount: Array.isArray(result.data) ? result.data.length : null,
+        wordCount: Array.isArray(result.transcript) ? result.transcript.length : null,
     });
     await completeTranscriptJob(transcriptId, jobType, 'Transcription retry completed.');
 }

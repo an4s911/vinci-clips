@@ -54,6 +54,7 @@ async function generateJsonContent({ genAI, contents, responseSchema, safetySett
                     generationConfig: {
                         responseMimeType: 'application/json',
                         responseSchema,
+                        maxOutputTokens: 65536,
                     },
                     ...(safetySettings ? { safetySettings } : {})
                 });
