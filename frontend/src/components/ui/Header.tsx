@@ -70,21 +70,6 @@ export default function Header({ className }: { className?: string }) {
         </span>
       </Link>
       <nav style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-        <button
-          style={{
-            background: "linear-gradient(135deg, #14b8a6, #0d9488)",
-            color: "white",
-            padding: "0.5rem 1rem",
-            borderRadius: "8px",
-            fontWeight: 600,
-            transition: "all 0.3s ease",
-            border: "none",
-            cursor: "pointer",
-          }}
-          onClick={() => window.open("https://app.tryvinci.com", "_blank")}
-        >
-          Try Other Vinci Apps
-        </button>
         {user && (
           <button
             onClick={handleLogout}

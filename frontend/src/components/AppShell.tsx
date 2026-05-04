@@ -2,7 +2,6 @@
 
 import { usePathname } from "next/navigation";
 import Header from "@/components/ui/Header";
-import Footer from "@/components/ui/Footer";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -14,7 +13,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <>
       <Header />
       {children}
-      <Footer />
     </>
   );
 }
