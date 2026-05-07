@@ -71,6 +71,32 @@ export default function Header({ className }: { className?: string }) {
       </Link>
       <nav style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
         {user && (
+          <>
+            <Link
+              href="/clips/transcripts"
+              style={{
+                color: isDark ? "rgba(255,255,255,0.7)" : "rgba(0,0,0,0.6)",
+                textDecoration: "none",
+                fontSize: "0.875rem",
+                fontWeight: 500,
+              }}
+            >
+              Transcripts
+            </Link>
+            <Link
+              href="/clips/settings"
+              style={{
+                color: isDark ? "rgba(255,255,255,0.7)" : "rgba(0,0,0,0.6)",
+                textDecoration: "none",
+                fontSize: "0.875rem",
+                fontWeight: 500,
+              }}
+            >
+              Settings
+            </Link>
+          </>
+        )}
+        {user && (
           <button
             onClick={handleLogout}
             style={{

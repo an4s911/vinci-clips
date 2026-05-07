@@ -43,3 +43,10 @@ model Transcript {
   analysisMetadata Json?
   reframeAssets    Json?
 }
+
+model BlockedWord {
+  id        String   @id @default(cuid())
+  term      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

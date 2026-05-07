@@ -13,6 +13,7 @@ const {
     resolveLocalUploadPath,
     startTranscriptWorker,
 } = require('../utils/backgroundJobs');
+const { analyzeAndAutoGenerateClips } = require('../utils/clipAutomation');
 
 const router = express.Router();
 
@@ -58,6 +59,7 @@ async function runRetryTranscription(transcriptId, mp3Path) {
         wordCount: Array.isArray(result.transcript) ? result.transcript.length : null,
     });
     await completeTranscriptJob(transcriptId, jobType, 'Transcription retry completed.');
+    await analyzeAndAutoGenerateClips(transcriptId);
 }
 
 router.post('/:transcriptId', async (req, res) => {

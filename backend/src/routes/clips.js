@@ -5,30 +5,21 @@ const path = require('path');
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const { generateJsonContent } = require('../utils/gemini');
 const {
-    CLIPS_DIR,
-    appendPrimaryClipVideo,
     buildGeneratedClipsMap,
-    createClipVideoRecord,
     deleteClipVideoVersion,
     getPrimaryClipVideo,
     getVideoFilePath,
-    makeTimestampedFilename,
     normalizeClipHook,
     normalizeTranscriptClips
 } = require('../utils/clipVideos');
 const { getCoveredTranscriptText } = require('../utils/clipModeration');
+const { generateSingleClipInBackground } = require('../utils/clipGeneration');
 const {
-    assertClipNotCancelled,
-    completeClipGeneration,
     createJobState,
-    logVideoProcessing,
-    markClipPhase,
     requestClipCancel,
-    runTrackedCommand,
     startClipWorker,
     updateClipGeneration
 } = require('../utils/backgroundJobs');
-const { deleteLocalMedia } = require('../utils/mediaStorage');
 
 const router = express.Router();
 
@@ -104,6 +95,34 @@ function buildPrimaryClipGroups(transcripts) {
             };
         })
         .filter(Boolean);
+}
+
+async function queueClipGeneration(transcript, transcriptId, clipIndex) {
+    const clip = transcript.clips?.[clipIndex];
+    if (!clip) {
+        throw new Error('Clip not found.');
+    }
+
+    if (clip.generation && ['queued', 'running', 'cancelling'].includes(clip.generation.status)) {
+        const error = new Error('Clip generation is already active for this clip.');
+        error.status = 409;
+        throw error;
+    }
+
+    const updatedTranscript = await updateClipGeneration(transcriptId, clipIndex, createJobState({
+        status: 'queued',
+        phase: 'prepare',
+        progressMessage: 'Clip generation queued.',
+    }));
+
+    const started = startClipWorker(transcriptId, clipIndex, () => generateSingleClipInBackground(transcriptId, clipIndex));
+    if (!started) {
+        const error = new Error('Clip generation is already active for this clip.');
+        error.status = 409;
+        throw error;
+    }
+
+    return updatedTranscript;
 }
 
 async function resolveSelectedPrimaryClips(selectedClips) {
@@ -223,109 +242,6 @@ router.post('/download-zip', async (req, res) => {
 });
 
 
-async function generateSingleClipInBackground(transcriptId, clipIndex) {
-    let transcript = await Transcript.findById(transcriptId);
-    const clip = transcript?.clips?.[clipIndex];
-    if (!transcript || !clip) {
-        throw new Error('Clip not found.');
-    }
-
-    const clipsDir = CLIPS_DIR;
-    if (!fs.existsSync(clipsDir)) {
-        fs.mkdirSync(clipsDir, { recursive: true });
-    }
-
-    await assertClipNotCancelled(transcriptId, clipIndex);
-    await markClipPhase(transcriptId, clipIndex, 'prepare', 'Preparing clip generation.');
-    const outputFilename = makeTimestampedFilename(transcriptId, clipIndex);
-    const outputPath = path.join(clipsDir, outputFilename);
-    const clipUrl = `/uploads/clips/${outputFilename}`;
-    const videoPath = path.join(__dirname, '..', '..', 'uploads', path.basename(transcript.videoUrl));
-
-    if (!fs.existsSync(videoPath)) {
-        throw new Error('Source video file is missing.');
-    }
-
-    if (clip.segments && clip.segments.length > 0) {
-        const segmentFiles = [];
-        const concatFilePath = path.join(clipsDir, `${transcriptId}_clip_${clipIndex}_${Date.now()}_concat.txt`);
-
-        try {
-            for (let j = 0; j < clip.segments.length; j++) {
-                await assertClipNotCancelled(transcriptId, clipIndex);
-                const segment = clip.segments[j];
-                const phase = `cut-segment-${j + 1}`;
-                const segmentPath = path.join(clipsDir, `${transcriptId}_clip_${clipIndex}_${Date.now()}_segment_${j}.mp4`);
-                const duration = segment.end - segment.start;
-
-                await markClipPhase(transcriptId, clipIndex, phase, `Cutting segment ${j + 1}/${clip.segments.length}.`, {
-                    segmentIndex: j + 1,
-                    segmentCount: clip.segments.length,
-                });
-                await runTrackedCommand({
-                    transcriptId,
-                    clipIndex,
-                    jobType: 'clip-generation',
-                    phase,
-                    command: `ffmpeg -y -i "${videoPath}" -ss ${segment.start} -t ${duration} "${segmentPath}"`
-                });
-                segmentFiles.push(segmentPath);
-            }
-
-            await assertClipNotCancelled(transcriptId, clipIndex);
-            await markClipPhase(transcriptId, clipIndex, 'stitch-segments', 'Stitching generated segments.', {
-                segmentCount: clip.segments.length,
-            });
-            const concatContent = segmentFiles.map(file => `file '${path.resolve(file)}'`).join('\n');
-            fs.writeFileSync(concatFilePath, concatContent);
-            await runTrackedCommand({
-                transcriptId,
-                clipIndex,
-                jobType: 'clip-generation',
-                phase: 'stitch-segments',
-                command: `ffmpeg -y -f concat -safe 0 -i "${concatFilePath}" -c copy "${outputPath}"`
-            });
-        } finally {
-            await markClipPhase(transcriptId, clipIndex, 'cleanup-temp', 'Cleaning up temporary segment files.');
-            await Promise.all([
-                ...segmentFiles.map(file => deleteLocalMedia(file, { missingOk: true })),
-                deleteLocalMedia(concatFilePath, { missingOk: true }),
-            ]);
-            logVideoProcessing(transcriptId, 'completed', 'Clip generation temp cleanup completed', {
-                jobType: 'clip-generation',
-                clipIndex,
-                phase: 'cleanup-temp',
-                segmentCount: segmentFiles.length,
-            });
-        }
-    } else if (clip.start !== undefined && clip.end !== undefined) {
-        await assertClipNotCancelled(transcriptId, clipIndex);
-        await markClipPhase(transcriptId, clipIndex, 'cut-segment', 'Cutting clip segment.');
-        const duration = clip.end - clip.start;
-        await runTrackedCommand({
-            transcriptId,
-            clipIndex,
-            jobType: 'clip-generation',
-            phase: 'cut-segment',
-            command: `ffmpeg -y -i "${videoPath}" -ss ${clip.start} -t ${duration} "${outputPath}"`
-        });
-    } else {
-        throw new Error('Clip does not contain valid timing data.');
-    }
-
-    await assertClipNotCancelled(transcriptId, clipIndex);
-    await markClipPhase(transcriptId, clipIndex, 'save-video', 'Saving generated clip.');
-    transcript = await Transcript.findById(transcriptId);
-    const videoRecord = createClipVideoRecord({
-        type: 'generated',
-        url: clipUrl,
-        filename: outputFilename,
-        hook: { enabled: false }
-    });
-    await appendPrimaryClipVideo(Transcript, transcript, clipIndex, videoRecord);
-    await completeClipGeneration(transcriptId, clipIndex, clipUrl);
-}
-
 // Generate actual video clips from analyzed clips
 router.post('/generate/:transcriptId', async (req, res) => {
     const { transcriptId } = req.params;
@@ -351,21 +267,7 @@ router.post('/generate/:transcriptId', async (req, res) => {
             });
         }
 
-        const clip = transcript.clips[requestedClipIndex];
-        if (clip.generation && ['queued', 'running', 'cancelling'].includes(clip.generation.status)) {
-            return res.status(409).json({ error: 'Clip generation is already active for this clip.' });
-        }
-
-        const updatedTranscript = await updateClipGeneration(transcriptId, requestedClipIndex, createJobState({
-            status: 'queued',
-            phase: 'prepare',
-            progressMessage: 'Clip generation queued.',
-        }));
-
-        const started = startClipWorker(transcriptId, requestedClipIndex, () => generateSingleClipInBackground(transcriptId, requestedClipIndex));
-        if (!started) {
-            return res.status(409).json({ error: 'Clip generation is already active for this clip.' });
-        }
+        const updatedTranscript = await queueClipGeneration(transcript, transcriptId, requestedClipIndex);
 
         res.status(202).json({
             message: 'Clip generation accepted. Processing continues in the background.',
@@ -375,6 +277,59 @@ router.post('/generate/:transcriptId', async (req, res) => {
         console.error('Error starting clip generation:', error);
         res.status(500).json({
             error: 'Failed to start clip generation.',
+            details: error.message,
+        });
+    }
+});
+
+router.post('/generate-batch/:transcriptId', async (req, res) => {
+    const { transcriptId } = req.params;
+
+    try {
+        const transcript = await Transcript.findById(transcriptId);
+        if (!transcript) {
+            return res.status(404).json({ error: 'Transcript not found.' });
+        }
+
+        const normalizedClips = normalizeTranscriptClips(transcript);
+        if (normalizedClips.length === 0) {
+            return res.status(400).json({ error: 'No clips found. Run analysis first.' });
+        }
+
+        const requestedIndexes = Array.isArray(req.body.clipIndexes)
+            ? req.body.clipIndexes.map(value => Number.parseInt(value, 10)).filter(Number.isInteger)
+            : normalizedClips.map((_, index) => index);
+        const limit = Number.isInteger(req.body.limit)
+            ? Math.max(1, req.body.limit)
+            : requestedIndexes.length;
+        const uniqueIndexes = [...new Set(requestedIndexes)]
+            .filter(index => index >= 0 && index < normalizedClips.length)
+            .filter(index => {
+                const clip = normalizedClips[index];
+                const hasVideo = Boolean(getPrimaryClipVideo(clip));
+                const active = Boolean(clip.generation && ['queued', 'running', 'cancelling'].includes(clip.generation.status));
+                return !hasVideo && !active;
+            })
+            .slice(0, limit);
+
+        let updatedTranscript = transcript;
+        const queuedClipIndexes = [];
+        for (const clipIndex of uniqueIndexes) {
+            updatedTranscript = await queueClipGeneration(updatedTranscript, transcriptId, clipIndex);
+            queuedClipIndexes.push(clipIndex);
+        }
+
+        res.status(202).json({
+            message: queuedClipIndexes.length
+                ? 'Batch clip generation accepted. Processing continues in the background.'
+                : 'No missing clips needed generation.',
+            queuedClipIndexes,
+            transcript: updatedTranscript,
+        });
+    } catch (error) {
+        console.error('Error starting batch clip generation:', error);
+        res.status(error.status || 500).json({
+            error: 'Failed to start batch clip generation.',
             details: error.message,
         });
     }

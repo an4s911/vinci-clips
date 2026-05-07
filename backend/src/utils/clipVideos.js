@@ -62,6 +62,7 @@ function normalizeClipVideos(transcript, clip, clipIndex) {
             aspectRatio: video.aspectRatio ?? null,
             captions: video.captions || { enabled: false },
             hook: video.hook || { enabled: false },
+            clipTimeline: Array.isArray(video.clipTimeline) ? video.clipTimeline : null,
             title: video.title || clip.title
         })).filter(video => video.url)
         : [];
@@ -121,7 +122,8 @@ function createClipVideoRecord({
     platformName = null,
     aspectRatio = null,
     captions = { enabled: false },
-    hook = { enabled: false }
+    hook = { enabled: false },
+    clipTimeline = null
 }) {
     return {
         id: uuidv4(),
@@ -134,7 +136,8 @@ function createClipVideoRecord({
         platformName,
         aspectRatio,
         captions,
-        hook
+        hook,
+        clipTimeline
     };
 }
 

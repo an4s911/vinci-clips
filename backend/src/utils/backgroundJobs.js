@@ -6,19 +6,24 @@ const logger = require('./logger');
 const activeTranscriptJobs = new Map();
 const activeClipJobs = new Map();
 
-const TRANSCRIPTION_PROMPT = "Transcribe the provided audio with word-level timestamps and identify the speaker for each word. Format the output as a JSON array of objects, where each object represents a single word with precise millisecond timing. Each object should have 'start' (in format MM:SS:mmm), 'end' (in format MM:SS:mmm), 'text' (single word), and 'speaker' fields. For example: [{'start': '00:00:000', 'end': '00:00:450', 'text': 'Hello', 'speaker': 'Speaker 1'}, {'start': '00:00:450', 'end': '00:00:890', 'text': 'world', 'speaker': 'Speaker 1'}]";
+function buildTranscriptionPrompt() {
+    return "Transcribe this audio with word-level timestamps. All timestamps must be relative to the start of this audio — the first sample is 00:00:000. " +
+        "Return a JSON array of objects, each with 'start' (MM:SS:mmm), 'end' (MM:SS:mmm), and 'text' (one word). " +
+        "Example: [{'start':'00:00:000','end':'00:00:450','text':'Hello'}, {'start':'00:00:450','end':'00:00:890','text':'world'}]";
+}
+
+const TRANSCRIPTION_PROMPT = buildTranscriptionPrompt();
 const TRANSCRIPTION_SCHEMA = {
     type: 'ARRAY',
     items: {
         type: 'OBJECT',
         properties: {
             start: { type: 'STRING' },
-            end: { type: 'STRING' },
-            text: { type: 'STRING' },
-            speaker: { type: 'STRING' },
+            end:   { type: 'STRING' },
+            text:  { type: 'STRING' },
         },
-        required: ['start', 'end', 'text', 'speaker'],
-        propertyOrdering: ['start', 'end', 'text', 'speaker'],
+        required: ['start', 'end', 'text'],
+        propertyOrdering: ['start', 'end', 'text'],
     },
 };
 
@@ -431,6 +436,7 @@ function resolveLocalUploadPath(mediaUrl) {
 }
 
 module.exports = {
+    buildTranscriptionPrompt,
     TRANSCRIPTION_PROMPT,
     TRANSCRIPTION_SCHEMA,
     activeClipJobs,

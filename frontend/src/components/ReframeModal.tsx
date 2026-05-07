@@ -68,6 +68,7 @@ interface ReframeModalProps {
   sourceVideoId?: string;
   clipIndex?: number;
   clipDefinition?: any;
+  clipTimeline?: any[] | null;
   clipHook?: ClipHook;
   transcriptData?: any[]; // Pass transcript data for active speaker detection
 }
@@ -108,7 +109,7 @@ const getHookStyleCSS = (style: CaptionStyle, platformId: string): React.CSSProp
 });
 
 const ReframeModal: React.FC<ReframeModalProps> = ({
-  isOpen, onClose, onGenerationComplete, transcriptId, videoUrl, originalFilename, generatedClipUrl, sourceVideoId, clipIndex, clipDefinition, clipHook
+  isOpen, onClose, onGenerationComplete, transcriptId, videoUrl, originalFilename, generatedClipUrl, sourceVideoId, clipIndex, clipDefinition, clipTimeline, clipHook
 }) => {
   // --- State Management (no major changes, `currentTab` removed) ---
   const [selectedPlatform, setSelectedPlatform] = useState<string>('tiktok');
@@ -279,6 +280,7 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
         hook: hookEnabled ? { enabled: true, text: normalizedHookText } : { enabled: false },
         activeSpeakerFace,
         clipDefinition,
+        clipTimeline,
         clipIndex,
         sourceVideoId,
         processingMode: keepOriginalFrame ? 'captions-only' : 'reframe'

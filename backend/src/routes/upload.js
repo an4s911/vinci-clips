@@ -15,6 +15,7 @@ const {
     startTranscriptWorker,
 } = require('../utils/backgroundJobs');
 const { deleteLocalMedia } = require('../utils/mediaStorage');
+const { analyzeAndAutoGenerateClips } = require('../utils/clipAutomation');
 
 const upload = multer({
     dest: 'uploads/temp/',
@@ -154,6 +155,7 @@ async function processUploadedFile({ transcriptId, originalName, videoPath }) {
         wordCount: Array.isArray(transcriptContent) ? transcriptContent.length : null,
     });
     await completeTranscriptJob(transcriptId, jobType, 'Transcription completed.');
+    await analyzeAndAutoGenerateClips(transcriptId);
     } finally {
         await Promise.all([
             deleteLocalMedia(videoPath, { missingOk: true }),

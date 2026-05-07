@@ -264,7 +264,7 @@ async function persistAssetState(transcript, generatedClipUrl, updater) {
 // --- Express Routes ---
 router.post('/generate', async (req, res) => {
     try {
-        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, hook, clipDefinition, clipIndex, processingMode, sourceVideoId } = req.body;
+        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, hook, clipDefinition, clipTimeline, clipIndex, processingMode, sourceVideoId } = req.body;
         const captionsOnly = processingMode === 'captions-only';
         const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
         const normalizedHook = {
@@ -331,33 +331,54 @@ router.post('/generate', async (req, res) => {
                 ? generateVisualDirectorFilter(resolvedDetections, videoDimensions, targetRatio)
                 : buildStaticCropFilter(resolvedCropParameters);
 
-            await new Promise((resolve, reject) => {
-                ffmpeg(tempVideoPath)
-                    .videoFilters(cropFilter)
-                    .outputOptions(['-c:v libx264', '-crf 23', '-preset medium', '-c:a aac', '-b:a 128k'])
-                    .output(outputPath)
-                    .on('progress', (progress) => logger.info(`Processing: ${progress.percent}% done`))
-                    .on('end', resolve)
-                    .on('error', reject)
-                    .run();
-            });
+            if (hasOverlay) {
+                // Single-pass: crop + caption/hook burn in one ffmpeg run to avoid A/V drift from double re-encode.
+                const croppedDimensions = {
+                    width: resolvedCropParameters.width,
+                    height: resolvedCropParameters.height,
+                };
+                const captionedOutputPath = path.join('uploads', 'temp', `captioned_${sanitizedOutputName}`);
+                await renderCaptionedVideo({
+                    inputPath: tempVideoPath,
+                    outputPath: captionedOutputPath,
+                    transcriptSegments: transcript.transcript,
+                    styleId: captions.style,
+                    clipDefinition,
+                    clipTimeline,
+                    captionsEnabled: Boolean(captions?.enabled),
+                    hook: normalizedHook,
+                    logger,
+                    prependVideoFilters: [cropFilter],
+                    videoDimensions: croppedDimensions,
+                });
+                finalSourcePath = captionedOutputPath;
+            } else {
+                await new Promise((resolve, reject) => {
+                    ffmpeg(tempVideoPath)
+                        .videoFilters(cropFilter)
+                        .outputOptions(['-c:v libx264', '-crf 23', '-preset medium', '-c:a aac', '-b:a 128k'])
+                        .output(outputPath)
+                        .on('progress', (progress) => logger.info(`Processing: ${progress.percent}% done`))
+                        .on('end', resolve)
+                        .on('error', reject)
+                        .run();
+                });
+            }
         }
 
-        if (hasOverlay) {
+        if (captionsOnly && hasOverlay) {
             const captionedOutputPath = path.join('uploads', 'temp', `captioned_${sanitizedOutputName}`);
             await renderCaptionedVideo({
-                inputPath: captionsOnly ? tempVideoPath : outputPath,
+                inputPath: tempVideoPath,
                 outputPath: captionedOutputPath,
                 transcriptSegments: transcript.transcript,
                 styleId: captions.style,
                 clipDefinition,
+                clipTimeline,
                 captionsEnabled: Boolean(captions?.enabled),
                 hook: normalizedHook,
                 logger
             });
-            if (!captionsOnly) {
-                await deleteLocalMedia(outputPath, { missingOk: true });
-            }
             finalSourcePath = captionedOutputPath;
         }
         
@@ -394,7 +415,8 @@ router.post('/generate', async (req, res) => {
                 platformName: captionsOnly ? 'Original frame' : targetRatio.name,
                 aspectRatio: captionsOnly ? null : `${targetRatio.width}:${targetRatio.height}`,
                 captions: reframedVideo.captions,
-                hook: reframedVideo.hook
+                hook: reframedVideo.hook,
+                clipTimeline: Array.isArray(clipTimeline) ? clipTimeline : sourceVideo?.clipTimeline || null
             });
 
             await appendPrimaryClipVideo(Transcript, transcript, parsedClipIndex, videoRecord);

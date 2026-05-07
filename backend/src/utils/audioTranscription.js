@@ -4,7 +4,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleAIFileManager } = require('@google/generative-ai/server');
 const { generateJsonContent, getModelCandidates } = require('./gemini');
 const {
-    TRANSCRIPTION_PROMPT,
+    buildTranscriptionPrompt,
     TRANSCRIPTION_SCHEMA,
     assertTranscriptNotCancelled,
     logVideoProcessing,
@@ -97,7 +97,7 @@ async function splitAudio(mp3Path, outDir, { durationSec, stepSec, totalDuration
             transcriptId,
             jobType,
             phase: 'split-audio',
-            command: `ffmpeg -y -ss ${startSec.toFixed(3)} -t ${clipDurationSec.toFixed(3)} -i ${shellQuote(mp3Path)} -c copy ${shellQuote(chunkPath)}`,
+            command: `ffmpeg -y -i ${shellQuote(mp3Path)} -ss ${startSec.toFixed(3)} -t ${clipDurationSec.toFixed(3)} -vn -acodec libmp3lame -q:a 2 -avoid_negative_ts make_zero ${shellQuote(chunkPath)}`,
         });
         chunks.push({ index, path: chunkPath, startSec });
     }
@@ -192,7 +192,7 @@ async function transcribeChunk({ genAI, fileManager, chunkPath, transcriptId, lo
         contents: [{
             role: 'user',
             parts: [
-                { text: TRANSCRIPTION_PROMPT },
+                { text: buildTranscriptionPrompt() },
                 audioPart,
             ],
         }],
@@ -204,6 +204,166 @@ async function transcribeChunk({ genAI, fileManager, chunkPath, transcriptId, lo
     }
 
     return { words: data, model, attempts };
+}
+
+function normalizeWordText(text) {
+    return String(text || '').toLowerCase().replace(/[^a-z0-9']/g, '');
+}
+
+function mergeChunkTranscripts(chunkResults, {
+    stepMs,
+    overlapMs = 0,
+    totalDurationSec = Infinity,
+    gapWarnSec = 3,
+    logger = { info() {}, warn() {} },
+    transcriptId,
+} = {}) {
+    const totalDurationMs = totalDurationSec * 1000;
+    const perChunkStats = chunkResults.map((_, i) => ({
+        chunkIndex: i,
+        raw: chunkResults[i].words.length,
+        kept: 0,
+        droppedMalformed: 0,
+        droppedDuplicate: 0,
+        droppedOutOfRange: 0,
+    }));
+
+    // Step 1: offset all words to absolute ms, tag with chunk metadata
+    const allWords = [];
+    for (let ci = 0; ci < chunkResults.length; ci += 1) {
+        const offsetMs = ci * stepMs;
+        const isLast = ci === chunkResults.length - 1;
+        const nextBoundaryMs = (ci + 1) * stepMs;
+
+        for (const word of chunkResults[ci].words) {
+            const startMs = timeStringToMs(word?.start);
+            const endMs = timeStringToMs(word?.end);
+
+            if (startMs === null || endMs === null) {
+                perChunkStats[ci].droppedMalformed += 1;
+                logger.warn('Dropping word with malformed timestamp', {
+                    transcriptId,
+                    chunkIndex: ci,
+                    word: { start: word?.start, end: word?.end, text: word?.text },
+                });
+                continue;
+            }
+
+            const absStartMs = startMs + offsetMs;
+            const absEndMs = endMs + offsetMs;
+            const isOverlapTail = !isLast && absStartMs >= (nextBoundaryMs - overlapMs);
+            const isOverlapHead = ci > 0 && startMs < overlapMs;
+
+            allWords.push({
+                ...word,
+                _absStartMs: absStartMs,
+                _absEndMs: absEndMs,
+                _localStartMs: startMs,
+                _chunkIndex: ci,
+                _isOverlapTail: isOverlapTail,
+                _isOverlapHead: isOverlapHead,
+                _drop: false,
+            });
+        }
+    }
+
+    // Step 2: dedup across adjacent chunk boundary pairs
+    for (let ci = 0; ci < chunkResults.length - 1; ci += 1) {
+        const nextBoundaryMs = (ci + 1) * stepMs;
+        const tail = allWords.filter((w) => w._chunkIndex === ci && w._isOverlapTail && !w._drop);
+        const head = allWords.filter((w) => w._chunkIndex === ci + 1 && w._isOverlapHead && !w._drop);
+
+        for (const t of tail) {
+            const match = head.find((h) =>
+                !h._drop
+                && normalizeWordText(t.text) === normalizeWordText(h.text)
+                && Math.abs(t._absStartMs - h._absStartMs) <= 150
+            );
+            if (match) {
+                // Duplicate in head — drop the later-chunk copy
+                match._drop = true;
+                perChunkStats[ci + 1].droppedDuplicate += 1;
+            }
+            // Unmatched tail words with absStart >= nextBoundaryMs are kept (rescues boundary words)
+        }
+    }
+
+    // Step 3: collect non-dropped words, validate, sort
+    const kept = [];
+    for (const w of allWords) {
+        if (w._drop) continue;
+
+        if (w._absEndMs < w._absStartMs) {
+            logger.warn('Dropping word with end before start', {
+                transcriptId,
+                chunkIndex: w._chunkIndex,
+                word: { start: w.start, end: w.end, text: w.text },
+            });
+            perChunkStats[w._chunkIndex].droppedOutOfRange += 1;
+            continue;
+        }
+
+        if (w._absStartMs > totalDurationMs) {
+            logger.warn('Dropping word past audio duration', {
+                transcriptId,
+                chunkIndex: w._chunkIndex,
+                totalDurationSec,
+                word: { start: w.start, end: w.end, text: w.text },
+            });
+            perChunkStats[w._chunkIndex].droppedOutOfRange += 1;
+            continue;
+        }
+
+        const clampedEndMs = Math.min(w._absEndMs, totalDurationMs);
+
+        const { _absStartMs, _absEndMs, _localStartMs, _chunkIndex, _isOverlapTail, _isOverlapHead, _drop, ...wordData } = w;
+        kept.push({
+            ...wordData,
+            start: msToTimeString(_absStartMs),
+            end: msToTimeString(clampedEndMs),
+            _absStartMs,
+            _chunkIndex,
+        });
+    }
+
+    kept.sort((a, b) => a._absStartMs - b._absStartMs || a._chunkIndex - b._chunkIndex);
+
+    // Step 4: gap detection and finalize stats
+    const gaps = [];
+    for (let i = 1; i < kept.length; i += 1) {
+        const gapMs = kept[i]._absStartMs - timeStringToMs(kept[i - 1].end);
+        if (gapMs > gapWarnSec * 1000) {
+            const gapSec = gapMs / 1000;
+            const atSec = timeStringToMs(kept[i - 1].end) / 1000;
+            gaps.push({ afterIndex: i - 1, gapSec, atSec, afterChunkIndex: kept[i - 1]._chunkIndex });
+            logger.warn('Transcript gap detected', {
+                transcriptId,
+                atSec,
+                gapSec,
+                afterChunkIndex: kept[i - 1]._chunkIndex,
+            });
+        }
+    }
+
+    // Accumulate per-chunk kept counts and strip internal tags
+    const transcript = kept.map((w) => {
+        perChunkStats[w._chunkIndex].kept += 1;
+        const { _absStartMs, _chunkIndex, ...clean } = w;
+        return clean;
+    });
+
+    const totalKept = transcript.length;
+    const totalDropped = allWords.length - totalKept - allWords.filter((w) => w._drop).length + allWords.filter((w) => w._drop).length;
+
+    return {
+        transcript,
+        stats: {
+            perChunk: perChunkStats,
+            gaps,
+            totalKept,
+            totalDropped: allWords.length - totalKept,
+        },
+    };
 }
 
 function offsetAndFilterWords(words, chunkIndex, isLast, stepMs) {
@@ -372,9 +532,26 @@ async function transcribeAudioFile({
 
         await assertTranscriptNotCancelled(transcriptId, jobType);
         await onPhaseChange?.('merge-transcript', 'Merging chunk transcripts.');
-        const transcript = chunkResults
-            .flatMap((result, index) => offsetAndFilterWords(result.words, index, index === chunkResults.length - 1, stepMs))
-            .sort((a, b) => timeStringToMs(a.start) - timeStringToMs(b.start));
+        const overlapMs = config.overlapSec * 1000;
+        const mergeLogger = {
+            info: (msg, meta) => logVideoProcessing(transcriptId, 'running', msg, { jobType, phase: 'merge-transcript', ...meta }),
+            warn: (msg, meta) => logVideoProcessing(transcriptId, 'warning', msg, { jobType, phase: 'merge-transcript', ...meta }),
+        };
+        const { transcript, stats: mergeStats } = mergeChunkTranscripts(chunkResults, {
+            stepMs,
+            overlapMs,
+            totalDurationSec: durationSec,
+            transcriptId,
+            logger: mergeLogger,
+        });
+        logVideoProcessing(transcriptId, 'completed', 'Merged chunk transcripts', {
+            jobType,
+            phase: 'merge-transcript',
+            perChunk: mergeStats.perChunk,
+            gaps: mergeStats.gaps,
+            totalKept: mergeStats.totalKept,
+            totalDropped: mergeStats.totalDropped,
+        });
         const model = [...new Set(chunkResults.map((result) => result.model).filter(Boolean))].join(', ');
 
         return { transcript, model };
@@ -385,10 +562,9 @@ async function transcribeAudioFile({
 }
 
 module.exports = {
-    TRANSCRIPTION_PROMPT,
-    TRANSCRIPTION_SCHEMA,
     getAudioDurationSec,
     getPromotedModelOrder,
+    mergeChunkTranscripts,
     offsetAndFilterWords,
     runChunksWithLimit,
     splitAudio,

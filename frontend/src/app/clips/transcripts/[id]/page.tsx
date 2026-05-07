@@ -35,6 +35,12 @@ interface ClipVideo {
     aspectRatio: string | null;
     captions: { enabled: boolean; style?: string };
     hook?: { enabled: boolean; text?: string };
+    clipTimeline?: Array<{
+        sourceStart: number;
+        sourceEnd: number;
+        outputStart: number;
+        outputEnd: number;
+    }> | null;
     title?: string;
 }
 
@@ -84,6 +90,7 @@ interface Transcript {
         visibleClipCount?: number;
         suggestedClipCount?: number;
         blockedWordSource?: string;
+        autoGenerateLimit?: number;
         analyzedAt?: string;
     } | null;
     generatedClips?: {[key: number]: ClipVideo & { index: number; title: string }};
@@ -229,6 +236,28 @@ export default function TranscriptDetailPage() {
         }
     };
 
+    const generateRemainingClips = async () => {
+        if (!transcript) return;
+
+        const clipIndexes = transcript.clips
+            .map((clip, index) => ({ clip, index }))
+            .filter(({ clip, index }) => !generatedClips[index] && !isClipGenerating(clip))
+            .map(({ index }) => index);
+
+        if (clipIndexes.length === 0) return;
+
+        setError('');
+        try {
+            await axios.post(`${API_URL}/clips/clips/generate-batch/${transcript._id}`, {
+                clipIndexes
+            });
+            await fetchTranscript();
+        } catch (err: any) {
+            const errorMessage = err.response?.data?.details || err.response?.data?.error || 'Failed to generate remaining clips.';
+            setError(errorMessage);
+        }
+    };
+
     const cancelTranscriptProcessing = async () => {
         if (!transcript || cancellingTranscript) return;
         setCancellingTranscript(true);
@@ -286,6 +315,7 @@ export default function TranscriptDetailPage() {
             ...video,
             clipIndex,
             clipDefinition: transcript?.clips?.[clipIndex],
+            clipTimeline: video.clipTimeline,
             clipHook: transcript?.clips?.[clipIndex]?.hook
         });
         setIsReframeModalOpen(true);
@@ -415,6 +445,7 @@ export default function TranscriptDetailPage() {
     const hasTranscriptContent = Array.isArray(transcript?.transcript) && transcript.transcript.length > 0;
     const canRetryTranscription = transcript?.status === 'failed' && !hasTranscriptContent && Boolean(transcript.mp3Url);
     const canAnalyzeTranscript = hasTranscriptContent;
+    const remainingClipCount = transcript?.clips?.filter((clip, index) => !generatedClips[index] && !isClipGenerating(clip)).length || 0;
 
     if (loading) {
         return <div className="flex justify-center items-center h-screen">Loading...</div>;
@@ -438,8 +469,8 @@ export default function TranscriptDetailPage() {
                         Processed on {new Date(transcript.createdAt).toLocaleString()}
                     </CardDescription>
                 </CardHeader>
-                <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    <div className="md:col-span-2">
+                <CardContent className="space-y-8">
+                    <div>
                         {notice && (
                             <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                                 {notice}
@@ -496,6 +527,21 @@ export default function TranscriptDetailPage() {
                             >
                             </video>
                         )}
+                        <details className="mt-4 rounded-lg border bg-muted/30">
+                            <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+                                More · Transcript generated
+                            </summary>
+                            <div className="max-h-[360px] overflow-y-auto space-y-4 border-t bg-background px-4 py-4">
+                                {hasTranscriptContent ? transcript.transcript.map((segment, index) => (
+                                    <div key={index}>
+                                        <p className="font-semibold text-primary">{segment.speaker || 'Unknown Speaker'}: {segment.start} - {segment.end}</p>
+                                        <p>{segment.text}</p>
+                                    </div>
+                                )) : (
+                                    <p className="text-muted-foreground">No transcript content is available yet.</p>
+                                )}
+                            </div>
+                        </details>
                         <div className="mt-8">
                             <div className="flex items-center justify-between mb-4">
                                 <h3 className="text-2xl font-bold">Clip Analysis & Generation</h3>
@@ -505,7 +551,14 @@ export default function TranscriptDetailPage() {
                                         disabled={analyzing || !canAnalyzeTranscript}
                                         variant="outline"
                                     >
-                                        {analyzing ? 'Analyzing...' : 'Analyze for Clips'}
+                                        {analyzing ? 'Analyzing...' : transcript.clips?.length ? 'Re-analyze Clips' : 'Analyze for Clips'}
+                                    </Button>
+                                    <Button
+                                        onClick={generateRemainingClips}
+                                        disabled={!remainingClipCount}
+                                        variant="outline"
+                                    >
+                                        Generate Remaining{remainingClipCount ? ` (${remainingClipCount})` : ''}
                                     </Button>
                                     <Button 
                                         onClick={clearAnalyzedClips} 
@@ -525,6 +578,11 @@ export default function TranscriptDetailPage() {
                             {transcript.analysisMetadata?.filteredClipCount ? (
                                 <div className="mb-4 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                                     {transcript.analysisMetadata.filteredClipCount} clip{transcript.analysisMetadata.filteredClipCount === 1 ? '' : 's'} hidden for language.
+                                </div>
+                            ) : null}
+                            {transcript.analysisMetadata?.analyzedAt && transcript.clips?.length ? (
+                                <div className="mb-4 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-950">
+                                    Clips were analyzed automatically. The top {transcript.analysisMetadata.autoGenerateLimit || 6} are generated automatically; the rest can be generated manually.
                                 </div>
                             ) : null}
                             {!canAnalyzeTranscript ? (
@@ -773,20 +831,7 @@ export default function TranscriptDetailPage() {
                                     })}
                                 </div>
                             ) : (
-                                <p className="mt-4 text-muted-foreground">No clips analyzed yet. Click "Analyze for Clips" to get clip suggestions.</p>
-                            )}
-                        </div>
-                    </div>
-                    <div>
-                        <h3 className="text-2xl font-bold mb-4">Transcript</h3>
-                        <div className="h-[600px] overflow-y-auto space-y-4 pr-4">
-                            {hasTranscriptContent ? transcript.transcript.map((segment, index) => (
-                                <div key={index}>
-                                    <p className="font-semibold text-primary">{segment.speaker || 'Unknown Speaker'}: {segment.start} - {segment.end}</p>
-                                    <p>{segment.text}</p>
-                                </div>
-                            )) : (
-                                <p className="text-muted-foreground">No transcript content is available yet.</p>
+                                <p className="mt-4 text-muted-foreground">Clip analysis will run automatically when transcription finishes.</p>
                             )}
                         </div>
                     </div>
@@ -815,6 +860,7 @@ export default function TranscriptDetailPage() {
                     generatedClipUrl={selectedClipForReframe.url}
                     sourceVideoId={selectedClipForReframe.id}
                     clipDefinition={selectedClipForReframe.clipDefinition}
+                    clipTimeline={selectedClipForReframe.clipTimeline}
                     clipHook={selectedClipForReframe.clipHook}
                     clipIndex={selectedClipForReframe.clipIndex}
                     onGenerationComplete={fetchTranscript}

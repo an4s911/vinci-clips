@@ -12,6 +12,7 @@ const retryRoutes = require('./retry-transcription');
 const reframeRoutes = require('./reframe');
 const streamerRoutes = require('./streamer');
 const storageRoutes = require('./storage');
+const settingsRoutes = require('./settings');
 
 router.use('/upload', uploadRoutes);
 router.use('/import', importRoutes);
@@ -23,6 +24,7 @@ router.use('/reframe', reframeRoutes);
 router.use('/streamer', streamerRoutes);
 router.use('/retry', retryRoutes);
 router.use('/storage', storageRoutes);
+router.use('/settings', settingsRoutes);
 router.use('/admin', fixStatusRoutes);
 
 module.exports = router;

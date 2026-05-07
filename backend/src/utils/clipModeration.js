@@ -1,7 +1,4 @@
-const fs = require('fs');
-const path = require('path');
-
-const BLOCKED_WORDS_PATH = path.join(__dirname, '..', '..', 'config', 'blocked-words.json');
+const prisma = require('../db/prisma');
 const TOKEN_PATTERN = /[a-z0-9]+(?:['’_-][a-z0-9]+)*/gi;
 
 function tokenizeText(value) {
@@ -46,21 +43,21 @@ function parseTimestampToSeconds(value) {
     return NaN;
 }
 
-function loadBlockedWordTerms() {
+async function loadBlockedWordTerms() {
     try {
-        const raw = fs.readFileSync(BLOCKED_WORDS_PATH, 'utf8');
-        const parsed = JSON.parse(raw);
-        const blockedWords = Array.isArray(parsed?.blockedWords) ? parsed.blockedWords : [];
+        const blockedWords = await prisma.blockedWord.findMany({
+            orderBy: { term: 'asc' },
+        });
 
         return blockedWords
-            .filter(word => typeof word === 'string')
-            .map(word => ({
-                original: word,
-                tokens: tokenizeText(word)
+            .filter(entry => typeof entry?.term === 'string')
+            .map(entry => ({
+                original: entry.term,
+                tokens: tokenizeText(entry.term)
             }))
             .filter(entry => entry.tokens.length > 0);
     } catch (error) {
-        console.error('Failed to load blocked words config:', error);
+        console.error('Failed to load blocked words from database:', error);
         return [];
     }
 }

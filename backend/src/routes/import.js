@@ -16,6 +16,7 @@ const {
     startTranscriptWorker,
 } = require('../utils/backgroundJobs');
 const { deleteLocalMedia, deleteTranscriptTransientMedia } = require('../utils/mediaStorage');
+const { analyzeAndAutoGenerateClips } = require('../utils/clipAutomation');
 
 const router = express.Router();
 const execOptions = { maxBuffer: 20 * 1024 * 1024 };
@@ -233,6 +234,7 @@ async function processUrlImport({ transcriptId, url, platform }) {
         wordCount: Array.isArray(transcriptContent) ? transcriptContent.length : null,
     });
     await completeTranscriptJob(transcriptId, jobType, 'Import and transcription completed.');
+    await analyzeAndAutoGenerateClips(transcriptId);
 
     return { hasSavedMediaArtifacts };
     } finally {

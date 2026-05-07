@@ -118,11 +118,13 @@ const CAPTION_STYLES = {
 
 function timeToSeconds(timeStr) {
     if (!timeStr) return 0;
-    const parts = String(timeStr).split(':');
-    const minutes = parseInt(parts[0], 10) || 0;
-    const seconds = parseInt(parts[1], 10) || 0;
-    const milliseconds = parseInt(parts[2], 10) || 0;
-    return (minutes * 60) + seconds + (milliseconds / 1000);
+    const parts = String(timeStr).split(':').map((p) => parseInt(p, 10) || 0);
+    if (parts.length === 4) {
+        const [h, m, s, ms] = parts;
+        return (h * 3600) + (m * 60) + s + (ms / 1000);
+    }
+    const [m = 0, s = 0, ms = 0] = parts;
+    return (m * 60) + s + (ms / 1000);
 }
 
 function formatWordTime(totalSeconds) {
@@ -133,20 +135,11 @@ function formatWordTime(totalSeconds) {
 }
 
 function convertToSRTTime(timeStr) {
-    const parts = timeStr.split(':');
-    let hours = 0;
-    let minutes = 0;
-    let seconds = 0;
-    let milliseconds = 0;
-
-    if (parts.length === 3) {
-        minutes = parseInt(parts[0], 10) || 0;
-        seconds = parseInt(parts[1], 10) || 0;
-        milliseconds = parseInt(parts[2], 10) || 0;
-    } else if (parts.length === 2) {
-        minutes = parseInt(parts[0], 10) || 0;
-        seconds = parseInt(parts[1], 10) || 0;
-    }
+    const totalMs = Math.max(0, Math.round(timeToSeconds(timeStr) * 1000));
+    const hours = Math.floor(totalMs / 3600000);
+    const minutes = Math.floor((totalMs % 3600000) / 60000);
+    const seconds = Math.floor((totalMs % 60000) / 1000);
+    const milliseconds = totalMs % 1000;
 
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')},${milliseconds.toString().padStart(3, '0')}`;
 }
@@ -314,51 +307,74 @@ function normalizeTranscriptWords(segments) {
     return isWordLevel ? segments : convertToWordLevel(segments);
 }
 
-function buildWordsForClip(words, clipDefinition) {
+function normalizeClipTimeline(clipDefinition, clipTimeline) {
+    const rawTimeline = Array.isArray(clipTimeline) && clipTimeline.length > 0
+        ? clipTimeline
+        : clipDefinition?.mediaTimeline;
+
+    if (!Array.isArray(rawTimeline) || rawTimeline.length === 0) {
+        return [];
+    }
+
+    return rawTimeline
+        .map((segment) => ({
+            sourceStart: Number(segment.sourceStart),
+            sourceEnd: Number(segment.sourceEnd),
+            outputStart: Number(segment.outputStart),
+            outputEnd: Number(segment.outputEnd),
+        }))
+        .filter((segment) => (
+            Number.isFinite(segment.sourceStart)
+            && Number.isFinite(segment.sourceEnd)
+            && Number.isFinite(segment.outputStart)
+            && Number.isFinite(segment.outputEnd)
+            && segment.sourceStart < segment.sourceEnd
+            && segment.outputStart <= segment.outputEnd
+        ));
+}
+
+function clipWordToSegment(word, segStartSec, segEndSec, outputStartSec) {
+    const wordStart = timeToSeconds(word.start);
+    const wordEnd = timeToSeconds(word.end);
+    if (!(wordEnd > segStartSec && wordStart < segEndSec)) return null;
+    const clippedStart = Math.max(wordStart, segStartSec);
+    const clippedEnd = Math.min(wordEnd, segEndSec);
+    return {
+        ...word,
+        start: formatWordTime((clippedStart - segStartSec) + outputStartSec),
+        end: formatWordTime((clippedEnd - segStartSec) + outputStartSec),
+    };
+}
+
+function buildWordsForClip(words, clipDefinition, clipTimeline) {
     if (!clipDefinition) {
         return words;
     }
 
+    const timeline = normalizeClipTimeline(clipDefinition, clipTimeline);
+    if (timeline.length > 0) {
+        return timeline.flatMap((segment) => words
+            .map((w) => clipWordToSegment(w, segment.sourceStart, segment.sourceEnd, segment.outputStart))
+            .filter(Boolean));
+    }
+
     if (Array.isArray(clipDefinition.segments) && clipDefinition.segments.length > 0) {
-        let accumulatedOffset = 0;
-        const adjustedWords = [];
-
+        const out = [];
+        let acc = 0;
         clipDefinition.segments.forEach((segment) => {
-            const segmentDuration = segment.end - segment.start;
-            words.forEach((word) => {
-                const wordStart = timeToSeconds(word.start);
-                const wordEnd = timeToSeconds(word.end);
-
-                if (wordStart >= segment.start && wordEnd <= segment.end) {
-                    adjustedWords.push({
-                        ...word,
-                        start: formatWordTime((wordStart - segment.start) + accumulatedOffset),
-                        end: formatWordTime((wordEnd - segment.start) + accumulatedOffset)
-                    });
-                }
+            words.forEach((w) => {
+                const mapped = clipWordToSegment(w, segment.start, segment.end, acc);
+                if (mapped) out.push(mapped);
             });
-            accumulatedOffset += segmentDuration;
+            acc += (segment.end - segment.start);
         });
-
-        return adjustedWords;
+        return out;
     }
 
     if (clipDefinition.start !== undefined && clipDefinition.end !== undefined) {
         return words
-            .filter((word) => {
-                const wordStart = timeToSeconds(word.start);
-                const wordEnd = timeToSeconds(word.end);
-                return wordStart >= clipDefinition.start && wordEnd <= clipDefinition.end;
-            })
-            .map((word) => {
-                const wordStart = timeToSeconds(word.start) - clipDefinition.start;
-                const wordEnd = timeToSeconds(word.end) - clipDefinition.start;
-                return {
-                    ...word,
-                    start: formatWordTime(wordStart),
-                    end: formatWordTime(wordEnd)
-                };
-            });
+            .map((w) => clipWordToSegment(w, clipDefinition.start, clipDefinition.end, 0))
+            .filter(Boolean);
     }
 
     return words;
@@ -415,7 +431,7 @@ function filterWordsByRange(words, startTime, endTime) {
     return words.filter((word) => {
         const wordStart = timeToSeconds(word.start);
         const wordEnd = timeToSeconds(word.end);
-        return wordStart >= startTime && wordEnd <= endTime;
+        return wordEnd > startTime && wordStart < endTime;
     });
 }
 
@@ -462,13 +478,16 @@ async function renderCaptionedVideo({
     transcriptSegments,
     styleId,
     clipDefinition,
+    clipTimeline,
     startTime,
     endTime,
     captionsEnabled = true,
     hook = { enabled: false },
-    logger = console
+    logger = console,
+    prependVideoFilters = [],
+    videoDimensions: videoDimensionsOverride = null,
 }) {
-    const videoDimensions = await probeVideoDimensions(inputPath);
+    const videoDimensions = videoDimensionsOverride || await probeVideoDimensions(inputPath);
     const resolvedStyle = getResolvedStyle(styleId, videoDimensions);
     const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
     const hookEnabled = Boolean(hook?.enabled && hookText);
@@ -482,7 +501,7 @@ async function renderCaptionedVideo({
 
     if (captionsEnabled) {
         words = normalizeTranscriptWords(transcriptSegments);
-        words = buildWordsForClip(words, clipDefinition);
+        words = buildWordsForClip(words, clipDefinition, clipTimeline);
         words = filterWordsByRange(words, startTime, endTime);
 
         if (words.length === 0) {
@@ -517,9 +536,11 @@ async function renderCaptionedVideo({
         hookEnabled
     });
 
+    const allVideoFilters = [...prependVideoFilters, ...filters];
+
     await new Promise((resolve, reject) => {
         ffmpeg(inputPath)
-            .videoFilters(filters)
+            .videoFilters(allVideoFilters)
             .outputOptions([
                 '-c:v libx264',
                 '-c:a aac',
@@ -550,11 +571,15 @@ async function renderCaptionedVideo({
 
 module.exports = {
     CAPTION_STYLES,
+    clipWordToSegment,
     detectLayout,
     getCaptionStylesForClient,
     getResolvedStyle,
     moveFileSafe,
     probeVideoDimensions,
     renderCaptionedVideo,
-    timeToSeconds
+    buildWordsForClip,
+    convertToSRTTime,
+    filterWordsByRange,
+    timeToSeconds,
 };
