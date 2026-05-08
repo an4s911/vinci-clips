@@ -1,12 +1,13 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import Link from "next/link";
 import axios from "axios";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { Loader2, Plus, Trash2, Palette, ChevronRight } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -73,7 +74,22 @@ export default function ClipSettingsPage() {
   }
 
   return (
-    <main className="container mx-auto max-w-4xl p-8">
+    <main className="container mx-auto max-w-4xl p-8 space-y-6">
+      <Link href="/clips/settings/caption-templates">
+        <Card className="cursor-pointer hover:border-gray-400 transition-colors">
+          <CardContent className="flex items-center justify-between py-4">
+            <div className="flex items-center gap-3">
+              <Palette className="h-5 w-5 text-muted-foreground" />
+              <div>
+                <div className="font-medium">Caption Templates</div>
+                <div className="text-sm text-muted-foreground">Create and manage caption styles for videos</div>
+              </div>
+            </div>
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          </CardContent>
+        </Card>
+      </Link>
+
       <Card>
         <CardHeader>
           <CardTitle className="text-3xl">Clip Settings</CardTitle>

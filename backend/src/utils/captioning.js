@@ -1,120 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
+const prisma = require('../db/prisma');
 
-const CAPTION_STYLES = {
-    'bold-center': {
-        name: 'Bold Center',
-        description: 'Heavy sans-serif, centered, high contrast',
-        fontName: 'DejaVu Sans',
-        fontcolor: 'white',
-        borderw: 3,
-        bordercolor: 'black',
-        preview: {
-            fontFamily: '"DejaVu Sans", sans-serif',
-            fontWeight: 800,
-            textColor: '#ffffff',
-            backgroundColor: 'transparent',
-            borderColor: '#000000',
-            borderWidth: 3,
-            textShadow: '2px 2px 4px rgba(0,0,0,0.9)'
-        },
-        layouts: {
-            portrait: { fontsize: 24, maxWordsPerPhrase: 2, marginV: 120, marginL: 70, marginR: 70, previewFontSize: 18 },
-            square: { fontsize: 22, maxWordsPerPhrase: 3, marginV: 85, marginL: 55, marginR: 55, previewFontSize: 16 },
-            landscape: { fontsize: 18, maxWordsPerPhrase: 4, marginV: 60, marginL: 45, marginR: 45, previewFontSize: 14 }
-        }
-    },
-    'neon-pop': {
-        name: 'Neon Pop',
-        description: 'Bright neon text with bold outlines',
-        fontName: 'DejaVu Sans',
-        fontcolor: '#FF6B9D',
-        borderw: 3,
-        bordercolor: '#FFD93D',
-        shadow: true,
-        preview: {
-            fontFamily: '"DejaVu Sans", sans-serif',
-            fontWeight: 800,
-            textColor: '#FF6B9D',
-            backgroundColor: 'rgba(0,0,0,0.2)',
-            borderColor: '#FFD93D',
-            borderWidth: 2,
-            textShadow: '0 0 10px rgba(255,217,61,0.9), 2px 2px 4px rgba(0,0,0,0.85)'
-        },
-        layouts: {
-            portrait: { fontsize: 25, maxWordsPerPhrase: 2, marginV: 120, marginL: 70, marginR: 70, previewFontSize: 18 },
-            square: { fontsize: 23, maxWordsPerPhrase: 3, marginV: 90, marginL: 55, marginR: 55, previewFontSize: 16 },
-            landscape: { fontsize: 19, maxWordsPerPhrase: 4, marginV: 60, marginL: 45, marginR: 45, previewFontSize: 14 }
-        }
-    },
-    'typewriter': {
-        name: 'Typewriter',
-        description: 'Monospace subtitles with compact phrasing',
-        fontName: 'DejaVu Sans Mono',
-        fontcolor: 'white',
-        borderw: 2,
-        bordercolor: 'black',
-        preview: {
-            fontFamily: '"DejaVu Sans Mono", monospace',
-            fontWeight: 700,
-            textColor: '#ffffff',
-            backgroundColor: 'rgba(0,0,0,0.55)',
-            borderColor: '#000000',
-            borderWidth: 2,
-            textShadow: '1px 1px 2px rgba(0,0,0,0.85)'
-        },
-        layouts: {
-            portrait: { fontsize: 22, maxWordsPerPhrase: 2, marginV: 120, marginL: 75, marginR: 75, previewFontSize: 17 },
-            square: { fontsize: 20, maxWordsPerPhrase: 3, marginV: 90, marginL: 60, marginR: 60, previewFontSize: 15 },
-            landscape: { fontsize: 17, maxWordsPerPhrase: 4, marginV: 65, marginL: 50, marginR: 50, previewFontSize: 13 }
-        }
-    },
-    'bubble': {
-        name: 'Bubble Style',
-        description: 'Rounded, colorful subtitles with strong presence',
-        fontName: 'DejaVu Sans',
-        fontcolor: 'white',
-        borderw: 4,
-        bordercolor: '#4ECDC4',
-        preview: {
-            fontFamily: '"DejaVu Sans", sans-serif',
-            fontWeight: 700,
-            textColor: '#ffffff',
-            backgroundColor: 'rgba(0,0,0,0.55)',
-            borderColor: '#4ECDC4',
-            borderWidth: 3,
-            textShadow: '0 2px 4px rgba(0,0,0,0.8)'
-        },
-        layouts: {
-            portrait: { fontsize: 23, maxWordsPerPhrase: 2, marginV: 125, marginL: 80, marginR: 80, previewFontSize: 17 },
-            square: { fontsize: 21, maxWordsPerPhrase: 3, marginV: 95, marginL: 60, marginR: 60, previewFontSize: 15 },
-            landscape: { fontsize: 18, maxWordsPerPhrase: 4, marginV: 65, marginL: 50, marginR: 50, previewFontSize: 13 }
-        }
-    },
-    'minimal-clean': {
-        name: 'Minimal Clean',
-        description: 'Clean, light subtitles with subtle framing',
-        fontName: 'DejaVu Sans',
-        fontcolor: 'white',
-        borderw: 1,
-        bordercolor: 'black@0.35',
-        preview: {
-            fontFamily: '"DejaVu Sans", sans-serif',
-            fontWeight: 500,
-            textColor: '#ffffff',
-            backgroundColor: 'rgba(0,0,0,0.38)',
-            borderColor: 'rgba(255,255,255,0.2)',
-            borderWidth: 1,
-            textShadow: '1px 1px 2px rgba(0,0,0,0.65)'
-        },
-        layouts: {
-            portrait: { fontsize: 20, maxWordsPerPhrase: 2, marginV: 120, marginL: 75, marginR: 75, previewFontSize: 16 },
-            square: { fontsize: 19, maxWordsPerPhrase: 3, marginV: 90, marginL: 60, marginR: 60, previewFontSize: 14 },
-            landscape: { fontsize: 16, maxWordsPerPhrase: 4, marginV: 60, marginL: 50, marginR: 50, previewFontSize: 12 }
-        }
-    }
-};
+const ASS_PLAY_RES_HEIGHT = 540;
 
 function timeToSeconds(timeStr) {
     if (!timeStr) return 0;
@@ -151,18 +40,60 @@ function detectLayout(videoDimensions) {
     return 'square';
 }
 
-function getResolvedStyle(styleId, videoDimensions) {
-    const style = CAPTION_STYLES[styleId] || CAPTION_STYLES['bold-center'];
-    const layout = detectLayout(videoDimensions);
+function resolveTemplateForLayout(template, layout) {
+    const layouts = template.layouts || {};
+    const layoutData = layouts[layout] || layouts.portrait || {};
     return {
-        id: styleId in CAPTION_STYLES ? styleId : 'bold-center',
+        id: template.id,
+        name: template.name,
+        description: template.description,
         layout,
-        ...style,
-        ...style.layouts[layout]
+        fontName: template.fontName,
+        fontcolor: template.fontColor,
+        bordercolor: template.outlineColor,
+        backColor: template.backColor || null,
+        borderw: template.outlineWidth,
+        shadow: template.shadow,
+        shadowDepth: template.shadowDepth,
+        bold: template.bold,
+        italic: template.italic,
+        underline: template.underline,
+        alignment: template.alignment,
+        scaleX: template.scaleX,
+        scaleY: template.scaleY,
+        spacing: template.spacing,
+        uppercase: template.uppercase,
+        borderStyle: template.borderStyle,
+        hookOverrides: template.hookOverrides || {},
+        preview: template.preview || {},
+        ...layoutData,
     };
 }
 
+async function getResolvedStyle(styleId, videoDimensions) {
+    const fallbackId = 'bold-yellow';
+    let template = styleId
+        ? await prisma.captionTemplate.findUnique({ where: { id: styleId } })
+        : null;
+    if (!template) {
+        template = await prisma.captionTemplate.findUnique({ where: { id: fallbackId } });
+    }
+    if (!template) {
+        template = await prisma.captionTemplate.findFirst({ orderBy: { createdAt: 'asc' } });
+    }
+    if (!template) {
+        throw new Error('No caption templates found in database');
+    }
+    const layout = detectLayout(videoDimensions);
+    return resolveTemplateForLayout(template, layout);
+}
+
+async function getCaptionStylesForClient() {
+    return prisma.captionTemplate.findMany({ orderBy: { createdAt: 'asc' } });
+}
+
 function convertColorToASS(color) {
+    if (!color) return '&H00FFFFFF';
     if (color === 'white') return '&H00FFFFFF';
     if (color === 'black') return '&H00000000';
     if (color.startsWith('#')) {
@@ -202,19 +133,27 @@ function buildSubtitleFilter(srtPath, resolvedStyle) {
     const escapedPath = escapeSubtitlePath(srtPath);
     const styleParts = [
         `FontName=${resolvedStyle.fontName}`,
-        `FontSize=${resolvedStyle.fontsize}`,
+        `FontSize=${resolvedStyle.fontSize}`,
         `PrimaryColour=${convertColorToASS(resolvedStyle.fontcolor)}`,
         `OutlineColour=${convertColorToASS(resolvedStyle.bordercolor)}`,
         `Outline=${resolvedStyle.borderw}`,
-        'Alignment=2',
+        `Alignment=${resolvedStyle.alignment ?? 2}`,
         `MarginV=${resolvedStyle.marginV}`,
         `MarginL=${resolvedStyle.marginL}`,
         `MarginR=${resolvedStyle.marginR}`,
-        'WrapStyle=0'
+        'WrapStyle=0',
+        `ScaleX=${resolvedStyle.scaleX ?? 1}`,
+        `ScaleY=${resolvedStyle.scaleY ?? 1}`,
+        `Spacing=${resolvedStyle.spacing ?? 0}`,
+        `Bold=${resolvedStyle.bold ? 1 : 0}`,
+        `Italic=${resolvedStyle.italic ? 1 : 0}`,
+        `Underline=${resolvedStyle.underline ? 1 : 0}`,
+        `BorderStyle=${resolvedStyle.borderStyle ?? 1}`,
+        `Shadow=${resolvedStyle.shadow ? (resolvedStyle.shadowDepth ?? 1) : 0}`,
     ];
 
-    if (resolvedStyle.shadow) {
-        styleParts.push('Shadow=2');
+    if (resolvedStyle.backColor) {
+        styleParts.push(`BackColour=${convertColorToASS(resolvedStyle.backColor)}`);
     }
 
     return `subtitles='${escapedPath}':force_style='${styleParts.join(',')}'`;
@@ -236,22 +175,65 @@ function escapeASSText(text) {
         .trim();
 }
 
+function convertScaleToASSPercent(value) {
+    const numeric = Number(value ?? 1);
+    if (!Number.isFinite(numeric)) return 100;
+
+    // Templates store scale as a multiplier for CSS previews: 1 = normal, 3 = 300%.
+    // ASS Style fields use percentages: 100 = normal.
+    return numeric > 10 ? numeric : numeric * 100;
+}
+
+function roundEven(value) {
+    return Math.max(2, Math.round(value / 2) * 2);
+}
+
+function getASSPlayRes(videoDimensions) {
+    const width = Number(videoDimensions?.width);
+    const height = Number(videoDimensions?.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return { width: 960, height: ASS_PLAY_RES_HEIGHT };
+    }
+
+    return {
+        width: roundEven((width / height) * ASS_PLAY_RES_HEIGHT),
+        height: ASS_PLAY_RES_HEIGHT,
+    };
+}
+
 function buildHookASSContent(text, resolvedStyle, videoDimensions) {
-    const hookFontSize = Math.round(resolvedStyle.fontsize * 1.08);
-    const topMargin = resolvedStyle.layout === 'portrait' ? 70 : resolvedStyle.layout === 'square' ? 48 : 36;
+    const playRes = getASSPlayRes(videoDimensions);
+    const hookOverrides = resolvedStyle.hookOverrides || {};
+    const fontSizeMultiplier = hookOverrides.fontSizeMultiplier ?? 1.08;
+    const hookFontSize = Math.round((resolvedStyle.fontSize || 20) * fontSizeMultiplier);
+
+    const positionToAlignment = { top: 8, center: 5, bottom: 2 };
+    const hookAlignment = positionToAlignment[hookOverrides.position ?? 'top'] ?? 8;
+
+    const topMargin = hookOverrides.marginV ?? (
+        resolvedStyle.layout === 'portrait' ? 70 : resolvedStyle.layout === 'square' ? 48 : 36
+    );
     const sideMargin = Math.max(32, Math.round(videoDimensions.width * 0.08));
     const duration = videoDimensions.duration || 24 * 60 * 60;
+    const hookColor = hookOverrides.color
+        ? convertColorToASS(hookOverrides.color)
+        : convertColorToASS(resolvedStyle.fontcolor);
+    const hookScaleY = hookOverrides.scaleY != null
+        ? hookOverrides.scaleY
+        : (resolvedStyle.scaleY ?? 1);
+    const hookScaleXASS = convertScaleToASSPercent(1);
+    const hookScaleYASS = convertScaleToASSPercent(hookScaleY);
 
     return `[Script Info]
 ScriptType: v4.00+
-PlayResX: ${videoDimensions.width}
-PlayResY: ${videoDimensions.height}
+PlayResX: ${playRes.width}
+PlayResY: ${playRes.height}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Hook,${resolvedStyle.fontName},${hookFontSize},${convertColorToASS(resolvedStyle.fontcolor)},&H000000FF,${convertColorToASS(resolvedStyle.bordercolor)},&H80000000,-1,0,0,0,100,100,0,0,1,${resolvedStyle.borderw},${resolvedStyle.shadow ? 2 : 0},8,${sideMargin},${sideMargin},${topMargin},1
+Style: Hook,${resolvedStyle.fontName},${hookFontSize},${hookColor},&H000000FF,${convertColorToASS(resolvedStyle.bordercolor)},&H80000000,${resolvedStyle.bold ? -1 : 0},${resolvedStyle.italic ? 1 : 0},0,0,${hookScaleXASS},${hookScaleYASS},0,0,1,${resolvedStyle.borderw},${resolvedStyle.shadow ? (resolvedStyle.shadowDepth ?? 1) : 0},${hookAlignment},${sideMargin},${sideMargin},${topMargin},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -380,7 +362,7 @@ function buildWordsForClip(words, clipDefinition, clipTimeline) {
     return words;
 }
 
-function buildSRTContent(words, maxWordsPerPhrase) {
+function buildPhrases(words, maxWordsPerPhrase, uppercase = true) {
     if (!Array.isArray(words) || words.length === 0) {
         throw new Error('Words array is empty or invalid');
     }
@@ -391,36 +373,89 @@ function buildSRTContent(words, maxWordsPerPhrase) {
 
     for (let i = 0; i < words.length; i += 1) {
         const word = words[i];
-        if (!word || !word.start || !word.end || !word.text) {
-            continue;
-        }
-
-        if (phraseStart === null) {
-            phraseStart = word.start;
-        }
-
+        if (!word || !word.start || !word.end || !word.text) continue;
+        if (phraseStart === null) phraseStart = word.start;
         currentPhrase.push(word.text);
         const shouldEndPhrase = currentPhrase.length >= maxWordsPerPhrase || i === words.length - 1;
-
         if (shouldEndPhrase) {
+            const text = currentPhrase.join(' ');
             phrases.push({
                 start: phraseStart,
                 end: word.end,
-                text: currentPhrase.join(' ')
+                text: uppercase ? text.toUpperCase() : text,
             });
             currentPhrase = [];
             phraseStart = null;
         }
     }
+    return phrases;
+}
 
+function buildSRTContent(words, maxWordsPerPhrase, uppercase = true) {
+    const phrases = buildPhrases(words, maxWordsPerPhrase, uppercase);
     let srtContent = '';
     phrases.forEach((phrase, index) => {
         srtContent += `${index + 1}\n`;
         srtContent += `${convertToSRTTime(phrase.start)} --> ${convertToSRTTime(phrase.end)}\n`;
         srtContent += `${phrase.text}\n\n`;
     });
-
     return srtContent;
+}
+
+function buildCaptionASSContent(phrases, resolvedStyle, videoDimensions) {
+    const playRes = getASSPlayRes(videoDimensions);
+    const scaleX = convertScaleToASSPercent(resolvedStyle.scaleX);
+    const scaleY = convertScaleToASSPercent(resolvedStyle.scaleY);
+    const alignment = resolvedStyle.alignment ?? 2;
+    const backColour = resolvedStyle.backColor
+        ? convertColorToASS(resolvedStyle.backColor)
+        : '&H80000000';
+
+    const styleFields = [
+        'Default',
+        resolvedStyle.fontName,
+        resolvedStyle.fontSize,
+        convertColorToASS(resolvedStyle.fontcolor),
+        '&H000000FF',
+        convertColorToASS(resolvedStyle.bordercolor),
+        backColour,
+        resolvedStyle.bold ? -1 : 0,
+        resolvedStyle.italic ? 1 : 0,
+        resolvedStyle.underline ? 1 : 0,
+        0,
+        scaleX,
+        scaleY,
+        resolvedStyle.spacing ?? 0,
+        0,
+        resolvedStyle.borderStyle ?? 1,
+        resolvedStyle.borderw ?? 1,
+        resolvedStyle.shadow ? (resolvedStyle.shadowDepth ?? 1) : 0,
+        alignment,
+        resolvedStyle.marginL ?? 0,
+        resolvedStyle.marginR ?? 0,
+        resolvedStyle.marginV ?? 20,
+        1,
+    ].join(',');
+
+    const dialogues = phrases.map((phrase) =>
+        `Dialogue: 0,${formatASSTime(timeToSeconds(phrase.start))},${formatASSTime(timeToSeconds(phrase.end))},Default,,0,0,0,,${escapeASSText(phrase.text)}`
+    ).join('\n');
+
+    return `[Script Info]
+ScriptType: v4.00+
+PlayResX: ${playRes.width}
+PlayResY: ${playRes.height}
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: ${styleFields}
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+${dialogues}
+`;
 }
 
 function filterWordsByRange(words, startTime, endTime) {
@@ -433,20 +468,6 @@ function filterWordsByRange(words, startTime, endTime) {
         const wordEnd = timeToSeconds(word.end);
         return wordEnd > startTime && wordStart < endTime;
     });
-}
-
-function getCaptionStylesForClient() {
-    return Object.entries(CAPTION_STYLES).map(([id, style]) => ({
-        id,
-        name: style.name,
-        description: style.description,
-        preview: {
-            ...style.preview,
-            portraitFontSize: style.layouts.portrait.previewFontSize,
-            squareFontSize: style.layouts.square.previewFontSize,
-            landscapeFontSize: style.layouts.landscape.previewFontSize
-        }
-    }));
 }
 
 async function probeVideoDimensions(inputPath) {
@@ -488,7 +509,7 @@ async function renderCaptionedVideo({
     videoDimensions: videoDimensionsOverride = null,
 }) {
     const videoDimensions = videoDimensionsOverride || await probeVideoDimensions(inputPath);
-    const resolvedStyle = getResolvedStyle(styleId, videoDimensions);
+    const resolvedStyle = await getResolvedStyle(styleId, videoDimensions);
     const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
     const hookEnabled = Boolean(hook?.enabled && hookText);
 
@@ -508,11 +529,11 @@ async function renderCaptionedVideo({
             throw new Error('No words found in specified time range');
         }
 
-        const srtPath = path.join(tempDir, `${path.basename(outputPath, path.extname(outputPath))}.srt`);
-        const srtContent = buildSRTContent(words, resolvedStyle.maxWordsPerPhrase);
-        fs.writeFileSync(srtPath, srtContent);
-        tempSubtitlePaths.push(srtPath);
-        filters.push(buildSubtitleFilter(srtPath, resolvedStyle));
+        const phrases = buildPhrases(words, resolvedStyle.maxWordsPerPhrase, resolvedStyle.uppercase);
+        const assPath = path.join(tempDir, `${path.basename(outputPath, path.extname(outputPath))}.ass`);
+        fs.writeFileSync(assPath, buildCaptionASSContent(phrases, resolvedStyle, videoDimensions));
+        tempSubtitlePaths.push(assPath);
+        filters.push(buildASSSubtitleFilter(assPath));
     }
 
     if (hookEnabled) {
@@ -570,15 +591,23 @@ async function renderCaptionedVideo({
 }
 
 module.exports = {
-    CAPTION_STYLES,
     clipWordToSegment,
     detectLayout,
+    resolveTemplateForLayout,
     getCaptionStylesForClient,
     getResolvedStyle,
     moveFileSafe,
     probeVideoDimensions,
     renderCaptionedVideo,
     buildWordsForClip,
+    buildPhrases,
+    buildSRTContent,
+    buildCaptionASSContent,
+    buildSubtitleFilter,
+    buildHookASSContent,
+    buildASSSubtitleFilter,
+    escapeSubtitlePath,
+    convertColorToASS,
     convertToSRTTime,
     filterWordsByRange,
     timeToSeconds,

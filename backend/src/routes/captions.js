@@ -10,19 +10,21 @@ const {
 
 const router = express.Router();
 
-router.get('/styles', (req, res) => {
-    res.json({
-        success: true,
-        styles: getCaptionStylesForClient()
-    });
+router.get('/styles', async (req, res) => {
+    try {
+        const styles = await getCaptionStylesForClient();
+        res.json({ success: true, styles });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
 router.post('/generate/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { style = 'bold-center', startTime, endTime } = req.body;
+        const { style = 'bold-yellow', startTime, endTime } = req.body;
 
-        const transcript = await Transcript.findById(id);
+        const transcript = await Transcript.findById(id, { userId: req.user.id });
         if (!transcript) {
             return res.status(404).json({
                 success: false,

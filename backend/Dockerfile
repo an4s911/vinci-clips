@@ -8,7 +8,19 @@ RUN apk add --no-cache \
     ttf-dejavu \
     yt-dlp \
     make \
-    g++
+    g++ \
+    curl \
+    unzip
+
+RUN mkdir -p /usr/share/fonts/truetype/google && \
+    cd /tmp && \
+    for family in "Montserrat" "Poppins" "Bebas+Neue" "Oswald" "Anton" "Inter"; do \
+        curl -sL "https://fonts.google.com/download?family=${family}" -o font.zip && \
+        unzip -q font.zip -d fontdir && \
+        find fontdir -name "*.ttf" -exec cp {} /usr/share/fonts/truetype/google/ \; && \
+        rm -rf font.zip fontdir; \
+    done && \
+    fc-cache -f -v
 
 WORKDIR /app
 

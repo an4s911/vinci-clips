@@ -25,6 +25,10 @@ import {
 } from 'lucide-react';
 import SubjectDetection from './SubjectDetection';
 import axios from 'axios';
+import {
+  CaptionPreviewAspect,
+  CaptionTemplatePreview,
+} from './CaptionTemplatePreview';
 
 // --- Interfaces (no changes) ---
 interface Platform {
@@ -43,17 +47,24 @@ interface CaptionStyle {
   id: string;
   name: string;
   description: string;
-  preview: {
-    fontFamily: string;
-    fontWeight: number;
-    textColor: string;
-    backgroundColor: string;
-    borderColor: string;
-    borderWidth: number;
-    textShadow: string;
-    portraitFontSize: number;
-    squareFontSize: number;
-    landscapeFontSize: number;
+  fontName: string;
+  fontColor: string;
+  outlineColor: string;
+  backColor?: string;
+  outlineWidth: number;
+  bold: boolean;
+  italic: boolean;
+  shadow: boolean;
+  shadowDepth: number;
+  scaleX: number;
+  scaleY: number;
+  uppercase: boolean;
+  borderStyle: number;
+  preview?: { backgroundColor?: string };
+  layouts: {
+    portrait: { fontSize: number; maxWordsPerPhrase: number; marginV: number; marginL: number; marginR: number; previewFontSize: number };
+    square: { fontSize: number; maxWordsPerPhrase: number; marginV: number; marginL: number; marginR: number; previewFontSize: number };
+    landscape: { fontSize: number; maxWordsPerPhrase: number; marginV: number; marginL: number; marginR: number; previewFontSize: number };
   };
 }
 interface ReframeModalProps {
@@ -80,32 +91,61 @@ const PLATFORMS: Platform[] = [
   { id: 'youtube', name: 'YouTube Landscape', aspectRatio: '16:9', width: 16, height: 9, icon: <Monitor className="w-5 h-5" />, description: 'Widescreen format for YouTube, Facebook, LinkedIn' },
 ];
 
-// NEW: Helper to generate CSS for caption style previews
+const getPreviewAspectForPlatform = (platformId: string): CaptionPreviewAspect => {
+    if (platformId === 'youtube') return 'landscape';
+    if (platformId === 'instagram') return 'square';
+    return 'portrait';
+};
+
+const getPreviewCardClassForPlatform = (platformId: string): string => {
+    if (platformId === 'youtube') return 'w-48 h-28';
+    if (platformId === 'instagram') return 'w-36 h-36';
+    return 'w-32 h-48';
+};
+
+function fontFamilyCSS(fontName: string): string {
+    const lower = fontName.toLowerCase();
+    if (lower.includes("mono") || lower === "courier") return `"${fontName}", monospace`;
+    return `"${fontName}", sans-serif`;
+}
+
+// Helper to generate CSS for caption style previews
 const getCaptionStyleCSS = (style: CaptionStyle, platformId: string): React.CSSProperties => {
-    const layout = platformId === 'youtube' ? 'landscape' : platformId === 'instagram' ? 'square' : 'portrait';
-    const fontSize = layout === 'portrait'
-        ? style.preview.portraitFontSize
-        : layout === 'landscape'
-            ? style.preview.landscapeFontSize
-            : style.preview.squareFontSize;
-    const baseStyle: React.CSSProperties = {
-        position: 'absolute', bottom: '15%', left: '50%', transform: 'translateX(-50%)',
-        textAlign: 'center', fontSize: `${fontSize}px`, fontWeight: style.preview.fontWeight, padding: '0.2em 0.5em',
-        borderRadius: '8px', width: layout === 'portrait' ? '68%' : '80%', lineHeight: '1.2',
-        fontFamily: style.preview.fontFamily,
-        color: style.preview.textColor,
-        backgroundColor: style.preview.backgroundColor,
-        textShadow: style.preview.textShadow,
-        border: style.preview.borderWidth > 0 ? `${style.preview.borderWidth}px solid ${style.preview.borderColor}` : 'none'
-    };
-    return baseStyle;
+    const layout = getPreviewAspectForPlatform(platformId);
+    const layoutData = style.layouts[layout as 'portrait' | 'square' | 'landscape'];
+    const marginV = layoutData?.marginV ?? 40;
+    const shadowDepth = style.shadowDepth ?? 1;
+    const shadow = style.shadow
+        ? `${shadowDepth}px ${shadowDepth}px ${shadowDepth * 2}px rgba(0,0,0,0.8)` : 'none';
+    const bg = style.borderStyle === 3 && style.backColor ? style.backColor : 'transparent';
+    return {
+        position: 'absolute',
+        bottom: Math.min(marginV, 30),
+        left: '50%',
+        transform: `translateX(-50%) scale(${style.scaleX ?? 1}, ${style.scaleY ?? 1})`,
+        transformOrigin: 'bottom center',
+        textAlign: 'center',
+        fontSize: 10,
+        fontWeight: style.bold ? 800 : 400,
+        fontStyle: style.italic ? 'italic' : 'normal',
+        width: layout === 'portrait' ? '68%' : '80%',
+        lineHeight: '1.05',
+        fontFamily: fontFamilyCSS(style.fontName),
+        color: style.fontColor,
+        backgroundColor: bg,
+        textShadow: shadow,
+        textTransform: style.uppercase ? 'uppercase' : 'none',
+        WebkitTextStroke: style.outlineWidth > 0
+            ? `${style.outlineWidth}px ${style.outlineColor}` : undefined,
+        paintOrder: 'stroke fill',
+    } as React.CSSProperties;
 };
 
 const getHookStyleCSS = (style: CaptionStyle, platformId: string): React.CSSProperties => ({
     ...getCaptionStyleCSS(style, platformId),
-    top: '12%',
+    top: '10%',
     bottom: 'auto',
-    width: platformId === 'youtube' ? '76%' : '72%'
+    width: platformId === 'youtube' ? '76%' : '72%',
 });
 
 const ReframeModal: React.FC<ReframeModalProps> = ({
@@ -160,12 +200,10 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
 
   const fetchCaptionStyles = async () => {
     try {
-      const response = await axios.get(`${API_URL}/clips/captions/styles`);
-      setCaptionStyles(response.data.styles);
-      if (response.data.styles.length > 0) {
-        setSelectedCaptionStyle(response.data.styles[0].id);
-      }
-    } catch (error) { console.error('Failed to fetch caption styles:', error); }
+      const response = await axios.get(`${API_URL}/clips/caption-templates`);
+      setCaptionStyles(response.data.templates);
+      if (response.data.templates.length > 0) setSelectedCaptionStyle(response.data.templates[0].id);
+    } catch (error) { console.error('Failed to fetch caption templates:', error); }
   };
 
   const analyzeVideo = async (detectionResults: any[]) => {
@@ -428,8 +466,13 @@ const ReframeModal: React.FC<ReframeModalProps> = ({
                       <div className="flex gap-3 overflow-x-auto pb-3">
                         {captionStyles.map(style => (
                           <div key={style.id} onClick={() => setSelectedCaptionStyle(style.id)}
-                            className={`relative flex-shrink-0 w-32 h-48 bg-gray-800 rounded-lg cursor-pointer transition-all overflow-hidden ${selectedCaptionStyle === style.id ? 'ring-2 ring-blue-500' : ''}`}>
-                            <div style={getCaptionStyleCSS(style, selectedPlatform)}>Sample Text</div>
+                            className={`relative flex-shrink-0 ${getPreviewCardClassForPlatform(selectedPlatform)} rounded-lg cursor-pointer transition-all overflow-hidden ${selectedCaptionStyle === style.id ? 'ring-2 ring-blue-500' : ''}`}>
+                            <CaptionTemplatePreview
+                              template={style}
+                              aspect={getPreviewAspectForPlatform(selectedPlatform)}
+                              text="Sample Text"
+                              className="h-full w-full"
+                            />
                             <div className="absolute bottom-0 w-full p-2 bg-black/50">
                               <p className="text-white text-xs font-medium truncate">{style.name}</p>
                             </div>

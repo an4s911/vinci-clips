@@ -1,4 +1,7 @@
 const {
+    buildCaptionASSContent,
+    buildHookASSContent,
+    buildSubtitleFilter,
     buildWordsForClip,
     clipWordToSegment,
     convertToSRTTime,
@@ -71,5 +74,57 @@ describe('captioning timing helpers', () => {
         const words = [{ start: '00:05:000', end: '00:09:500', text: 'before' }];
         const result = filterWordsByRange(words, 10, 20);
         expect(result).toHaveLength(0);
+    });
+});
+
+describe('captioning ASS generation', () => {
+    const style = {
+        fontName: 'DejaVu Sans',
+        fontSize: 20,
+        fontcolor: '#FFFFFF',
+        bordercolor: '#000000',
+        borderw: 2,
+        bold: true,
+        italic: false,
+        underline: false,
+        alignment: 2,
+        scaleX: 1,
+        scaleY: 1,
+        spacing: 0,
+        borderStyle: 1,
+        shadow: false,
+        marginL: 60,
+        marginR: 70,
+        marginV: 20,
+    };
+
+    test('serializes stored multiplier scale values as ASS percentages', () => {
+        const ass = buildCaptionASSContent([
+            { start: '00:00:000', end: '00:01:000', text: 'HELLO' },
+        ], style, { width: 720, height: 1280 });
+
+        expect(ass).toContain('PlayResX: 304');
+        expect(ass).toContain('PlayResY: 540');
+        expect(ass).toContain('Style: Default,DejaVu Sans,20,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,0,2,60,70,20,1');
+    });
+
+    test('serializes hook ASS scale values as ASS percentages', () => {
+        const ass = buildHookASSContent('Hook text', {
+            ...style,
+            hookOverrides: { scaleY: 1.2, marginV: 50 },
+        }, { width: 720, height: 1280, duration: 3 });
+
+        expect(ass).toContain('Style: Hook,DejaVu Sans,22,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,120,0,0,1,2,0,8,58,58,50,1');
+    });
+
+    test('keeps legacy force_style scale values as multipliers', () => {
+        const filter = buildSubtitleFilter('/tmp/subtitles.srt', {
+            ...style,
+            scaleX: 1,
+            scaleY: 1.2,
+        });
+
+        expect(filter).toContain('ScaleX=1');
+        expect(filter).toContain('ScaleY=1.2');
     });
 });

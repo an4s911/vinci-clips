@@ -50,3 +50,34 @@ model BlockedWord {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model CaptionTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  isSeeded    Boolean  @default(false)
+
+  fontName    String   @default("DejaVu Sans")
+  fontColor   String   @default("#ffffff")
+  outlineColor String  @default("#000000")
+  backColor   String?
+  outlineWidth Float   @default(1)
+  shadow      Boolean  @default(false)
+  shadowDepth Float    @default(1)
+  bold        Boolean  @default(true)
+  italic      Boolean  @default(false)
+  underline   Boolean  @default(false)
+  alignment   Int      @default(2)
+  scaleX      Float    @default(1)
+  scaleY      Float    @default(1)
+  spacing     Float    @default(0)
+  uppercase   Boolean  @default(true)
+  borderStyle Int      @default(1)
+
+  layouts     Json
+  preview     Json
+  hookOverrides Json
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
