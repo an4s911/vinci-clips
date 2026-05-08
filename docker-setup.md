@@ -158,6 +158,7 @@ Configure production-specific values in `.env.prod`:
 - Set a strong `REDIS_PASSWORD`
 - Set `NEXT_PUBLIC_API_URL=/api`
 - Set `CORS_ORIGIN=https://$APP_DOMAIN`
+- Optionally set `YTDLP_COOKIES_PATH` and `YTDLP_USER_AGENT` for YouTube imports from VPS/server IPs
 
 Example:
 
@@ -169,6 +170,8 @@ LLM_MODEL=gemini-2.5-flash
 REDIS_PASSWORD=strong_random_password
 NEXT_PUBLIC_API_URL=/api
 CORS_ORIGIN=https://yourdomain.com
+YTDLP_COOKIES_PATH=/app/storage/yt-dlp-cookies.txt
+YTDLP_USER_AGENT=
 ```
 
 For Gemini free tier or constrained deployments, use:
@@ -195,6 +198,23 @@ Run this once on the VPS from the project root:
 mkdir -p backend/uploads backend/storage backend/temp backend/cache backend/logs certbot/conf certbot/www
 sudo chown -R 1001:1001 backend/uploads backend/storage backend/temp backend/cache backend/logs
 ```
+
+If YouTube imports are challenged on the VPS, export YouTube cookies from a
+browser session in Netscape format, place the file under `backend/storage/`, and
+point `YTDLP_COOKIES_PATH` at the in-container path:
+
+```bash
+cp yt-dlp-cookies.txt backend/storage/yt-dlp-cookies.txt
+sudo chown 1001:1001 backend/storage/yt-dlp-cookies.txt
+chmod 600 backend/storage/yt-dlp-cookies.txt
+```
+
+```env
+YTDLP_COOKIES_PATH=/app/storage/yt-dlp-cookies.txt
+```
+
+Set `YTDLP_USER_AGENT` only when the cookies require the same browser user-agent
+that exported them.
 
 ### 3. First Boot With HTTP-Only Nginx
 
@@ -318,6 +338,19 @@ docker system prune -a
 # Remove old volumes
 docker volume prune
 ```
+
+**4. YouTube import is blocked**
+```bash
+# Confirm yt-dlp can see the configured cookies file in the backend container
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec backend ls -l "$YTDLP_COOKIES_PATH"
+
+# Follow backend logs while retrying the import
+docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f backend
+```
+
+If the app reports that YouTube blocked the import request, refresh the exported
+cookies file and restart the backend container. The browser-facing error stays
+generic; raw `yt-dlp` output is kept out of the client UI.
 
 ### Health Checks
 

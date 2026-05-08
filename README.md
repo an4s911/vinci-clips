@@ -10,6 +10,7 @@ AI-powered video clipping platform for turning long-form videos into short clips
 
 - Upload local videos or import supported URLs.
 - Process media with FFmpeg and local filesystem storage.
+- Import YouTube URLs with yt-dlp, with optional cookie and user-agent settings for server/VPS deployments.
 - Transcribe audio with Google Gemini.
 - Analyze transcripts and suggest high-signal clips.
 - Generate single-segment or multi-segment clips in background jobs.
@@ -224,6 +225,28 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml exec backend npm 
 - `frontend/.env.local`: Used only when running/building the frontend directly outside Docker.
 
 Important: `NEXT_PUBLIC_API_URL` is baked into Next.js production builds. Rebuild the frontend Docker image after changing it.
+
+## YouTube URL Imports
+
+YouTube imports use `yt-dlp` in the backend container. Local imports may work
+without extra settings, but VPS and datacenter IPs are often challenged by
+YouTube. In that case, configure:
+
+```env
+YTDLP_COOKIES_PATH=/app/storage/yt-dlp-cookies.txt
+YTDLP_USER_AGENT=
+```
+
+`YTDLP_COOKIES_PATH` must point to a Netscape-format cookies file inside the
+backend container. For Docker deployments, place that file under
+`backend/storage/` on the host because it is mounted at `/app/storage` in the
+container. `YTDLP_USER_AGENT` is optional and should match the browser/profile
+used to export the cookies when needed.
+
+Client-facing import and transcription failures are sanitized by the backend.
+The API returns `failureReason` and `processingJob.errorCode`; frontend pages
+should render those values rather than exposing raw `yt-dlp`, FFmpeg, or model
+provider errors.
 
 ## Transcription Chunking
 
