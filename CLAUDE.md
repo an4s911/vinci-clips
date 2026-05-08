@@ -245,3 +245,4 @@ Background jobs use `findByIdAndUpdate` without userId — this is intentional s
 - When planning ensure we commit changes to git time to time to ensure progress
 - When any issues are identified which may be longer, log them as issues on git
 - in commits remove any presence of Claude including any mentions in the commit message
+- Never run `npm run build`, ask the user to do so if needed.
