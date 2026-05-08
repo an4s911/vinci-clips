@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const prisma = require('./db/prisma');
+const { publicFailureReasonForTranscript, publicProcessingJob } = require('./utils/failureMessages');
 
 // Fields stored as scalar columns in Postgres
 const SCALAR_FIELDS = new Set([
@@ -46,7 +47,7 @@ function toDoc(record) {
         thumbnailUrl: record.thumbnailUrl,
         duration: record.duration,
         status: record.status,
-        failureReason: record.failureReason,
+        failureReason: publicFailureReasonForTranscript(record),
         failedAt: record.failedAt instanceof Date ? record.failedAt.toISOString() : record.failedAt,
         platform: record.platform,
         externalVideoId: record.externalVideoId,
@@ -54,7 +55,7 @@ function toDoc(record) {
         userId: record.userId,
         transcript: record.transcript,
         clips: record.clips,
-        processingJob: record.processingJob,
+        processingJob: publicProcessingJob(record.processingJob),
         analysisMetadata: record.analysisMetadata,
         reframeAssets: record.reframeAssets,
     };

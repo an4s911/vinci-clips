@@ -16,6 +16,7 @@ const {
 } = require('../utils/backgroundJobs');
 const { deleteLocalMedia } = require('../utils/mediaStorage');
 const { analyzeAndAutoGenerateClips } = require('../utils/clipAutomation');
+const { classifyUploadFailure } = require('../utils/failureMessages');
 
 const upload = multer({
     dest: 'uploads/temp/',
@@ -189,11 +190,25 @@ router.post('/file', upload.single('video'), async (req, res) => {
         tempPath: req.file.path,
     });
 
-    startTranscriptWorker(transcript._id, 'upload', () => processUploadedFile({
-        transcriptId: transcript._id,
-        originalName: req.file.originalname,
-        videoPath: req.file.path.trim(),
-    }));
+    startTranscriptWorker(transcript._id, 'upload', async () => {
+        try {
+            await processUploadedFile({
+                transcriptId: transcript._id,
+                originalName: req.file.originalname,
+                videoPath: req.file.path.trim(),
+            });
+        } catch (error) {
+            const current = await Transcript.findById(transcript._id);
+            const failure = classifyUploadFailure(error, current);
+            error.publicCode = failure.code;
+            error.publicMessage = failure.message;
+            await Transcript.findByIdAndUpdate(transcript._id, {
+                failureReason: failure.message,
+                failedAt: new Date().toISOString(),
+            });
+            throw error;
+        }
+    });
 
     res.status(202).json({
         message: 'Upload accepted. Processing continues in the background.',

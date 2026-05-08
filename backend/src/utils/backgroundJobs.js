@@ -31,7 +31,7 @@ function nowIso() {
     return new Date().toISOString();
 }
 
-function createJobState({ status = 'queued', phase, progressMessage, error = null } = {}) {
+function createJobState({ status = 'queued', phase, progressMessage, error = null, errorCode = null } = {}) {
     const now = nowIso();
     return {
         status,
@@ -43,6 +43,7 @@ function createJobState({ status = 'queued', phase, progressMessage, error = nul
         cancelRequestedAt: null,
         cancelledAt: null,
         error,
+        errorCode,
     };
 }
 
@@ -98,6 +99,7 @@ async function markTranscriptPhase(transcriptId, jobType, phase, progressMessage
         phase,
         progressMessage,
         error: null,
+        errorCode: null,
     }, {
         jobType,
         phase,
@@ -112,17 +114,20 @@ async function completeTranscriptJob(transcriptId, jobType, progressMessage = 'P
         progressMessage,
         completedAt: nowIso(),
         error: null,
+        errorCode: null,
     }, { jobType, phase: 'completed' });
 }
 
 async function failTranscriptJob(transcriptId, jobType, error, progressMessage = 'Processing failed.') {
-    const message = error?.message || String(error);
+    const message = error?.publicMessage || error?.message || String(error);
+    const errorCode = error?.publicCode || error?.code || null;
     const updated = await updateTranscriptJob(transcriptId, {
         status: 'failed',
         progressMessage,
         completedAt: nowIso(),
         error: message,
-    }, { jobType, error: message });
+        errorCode,
+    }, { jobType, error: message, errorCode });
     const current = await Transcript.findById(transcriptId);
     if (current && !current.failureReason) {
         await Transcript.findByIdAndUpdate(transcriptId, {
@@ -172,6 +177,7 @@ async function finalizeTranscriptCancelled(transcriptId, jobType) {
         cancelledAt: nowIso(),
         completedAt: nowIso(),
         error: null,
+        errorCode: null,
     }, { jobType });
     return Transcript.findByIdAndUpdate(transcriptId, {
         failureReason: null,

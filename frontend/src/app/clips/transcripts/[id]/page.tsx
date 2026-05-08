@@ -49,6 +49,7 @@ interface ProcessingJob {
     phase: string;
     progressMessage: string;
     error?: string | null;
+    errorCode?: string | null;
 }
 
 interface ClipGeneration extends ProcessingJob {
@@ -82,6 +83,7 @@ interface Transcript {
     clips: Clip[];
     createdAt: string;
     status?: 'uploading' | 'converting' | 'transcribing' | 'completed' | 'failed';
+    platform?: string | null;
     failureReason?: string | null;
     failedAt?: string | null;
     processingJob?: ProcessingJob | null;
@@ -194,7 +196,7 @@ export default function TranscriptDetailPage() {
             'probe-duration': 'Reading duration',
             'convert-mp3': 'Converting audio',
             'persist-files': 'Saving files',
-            'upload-gemini': 'Uploading to Gemini',
+            'upload-gemini': 'Uploading audio',
             transcribe: 'Transcribing',
             prepare: 'Preparing',
             'cut-segment': 'Cutting segment',

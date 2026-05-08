@@ -16,6 +16,7 @@ interface ProcessingJob {
   phase: string;
   progressMessage: string;
   error?: string | null;
+  errorCode?: string | null;
 }
 
 interface Transcript {
@@ -25,6 +26,8 @@ interface Transcript {
   status?: 'uploading' | 'converting' | 'transcribing' | 'completed' | 'failed';
   duration?: number;
   thumbnailUrl?: string;
+  mp3Url?: string | null;
+  platform?: string | null;
   failureReason?: string | null;
   failedAt?: string | null;
   processingJob?: ProcessingJob | null;
@@ -126,7 +129,12 @@ export default function UploadClient() {
 
   const formatPhase = (phase?: string) => {
     if (!phase) return 'Processing';
-    return phase
+    const labels: Record<string, string> = {
+      'upload-gemini': 'Uploading audio',
+      'probe-audio-duration': 'Reading audio duration',
+      'split-audio': 'Splitting audio',
+    };
+    return labels[phase] || phase
       .replace(/^cut-segment-(\d+)$/, 'cutting segment $1')
       .replace(/-/g, ' ')
       .replace(/\b\w/g, char => char.toUpperCase());

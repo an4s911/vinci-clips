@@ -439,10 +439,10 @@ async function transcribeAudioFile({
 
         if (durationSec <= config.durationSec) {
             await assertTranscriptNotCancelled(transcriptId, jobType);
-            await onPhaseChange?.('upload-gemini', 'Uploading audio to Gemini.', {
+            await onPhaseChange?.('upload-gemini', 'Uploading audio for transcription.', {
                 mp3FileName: path.basename(mp3Path),
             });
-            await onPhaseChange?.('transcribe', 'Transcribing audio with Gemini.', {
+            await onPhaseChange?.('transcribe', 'Transcribing audio.', {
                 mp3FileName: path.basename(mp3Path),
             });
             const { words, model } = await transcribeChunk({
@@ -469,7 +469,7 @@ async function transcribeAudioFile({
         });
 
         await assertTranscriptNotCancelled(transcriptId, jobType);
-        await onPhaseChange?.('transcribe', `Transcribing ${chunks.length} audio chunks with Gemini.`);
+        await onPhaseChange?.('transcribe', `Transcribing ${chunks.length} audio chunks.`);
         const stepMs = config.stepSec * 1000;
         let modelOrder = getModelCandidates();
         const chunkResults = await runChunksWithLimit(chunks, config.concurrency, async (chunk) => {

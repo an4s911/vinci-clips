@@ -17,6 +17,7 @@ const {
 } = require('../utils/backgroundJobs');
 const { deleteLocalMedia, deleteTranscriptTransientMedia } = require('../utils/mediaStorage');
 const { analyzeAndAutoGenerateClips } = require('../utils/clipAutomation');
+const { classifyImportFailure, classifyTranscriptionFailure } = require('../utils/failureMessages');
 
 const router = express.Router();
 const execOptions = { maxBuffer: 20 * 1024 * 1024 };
@@ -56,13 +57,29 @@ const validateUrl = (url) => {
     }
 };
 
+function getYtDlpArgs(args) {
+    const finalArgs = [...args];
+    const cookiesPath = process.env.YTDLP_COOKIES_PATH;
+    const userAgent = process.env.YTDLP_USER_AGENT;
+
+    if (cookiesPath) {
+        finalArgs.unshift('--cookies', cookiesPath);
+    }
+
+    if (userAgent) {
+        finalArgs.unshift('--user-agent', userAgent);
+    }
+
+    return finalArgs;
+}
+
 async function extractYouTubeVideo(transcriptId, url) {
     const { stdout } = await runTrackedFile({
         transcriptId,
         jobType: 'import',
         phase: 'extract-metadata',
         file: 'yt-dlp',
-        args: ['--dump-single-json', '--no-warnings', '--no-playlist', url],
+        args: getYtDlpArgs(['--dump-single-json', '--no-warnings', '--no-playlist', url]),
         options: execOptions,
     });
     const videoDetails = JSON.parse(stdout);
@@ -102,25 +119,15 @@ async function downloadYouTubeVideo(transcriptId, url, outputPath) {
         jobType: 'import',
         phase: 'download-video',
         file: 'yt-dlp',
-        args: [
+        args: getYtDlpArgs([
             '--no-playlist',
             '--format', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
             '--merge-output-format', 'mp4',
             '--output', outputPath,
             url
-        ],
+        ]),
         options: execOptions,
     });
-}
-
-function userSafeFailureReason(error) {
-    if (error?.code === 'TRANSCRIPTION_PARSE_FAILED') {
-        return 'Video import/download succeeded, but transcription failed because Gemini returned invalid JSON. Retry transcription to try again.';
-    }
-    if (error?.code === 'JOB_CANCELLED') {
-        return 'Import was cancelled.';
-    }
-    return 'Video import/download succeeded, but transcription failed. Retry transcription to try again.';
 }
 
 async function processUrlImport({ transcriptId, url, platform }) {
@@ -294,8 +301,13 @@ router.post('/url', async (req, res) => {
                 throw error;
             }
             const current = await Transcript.findById(transcript._id);
+            const failure = current?.mp3Url
+                ? classifyTranscriptionFailure(error)
+                : classifyImportFailure(error);
+            error.publicCode = failure.code;
+            error.publicMessage = failure.message;
             await Transcript.findByIdAndUpdate(transcript._id, {
-                failureReason: current?.mp3Url ? userSafeFailureReason(error) : (error?.message || 'Video import failed before transcription could start.'),
+                failureReason: failure.message,
                 failedAt: new Date().toISOString(),
             });
             throw error;

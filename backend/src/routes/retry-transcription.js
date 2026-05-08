@@ -14,20 +14,11 @@ const {
     startTranscriptWorker,
 } = require('../utils/backgroundJobs');
 const { analyzeAndAutoGenerateClips } = require('../utils/clipAutomation');
+const { classifyTranscriptionFailure } = require('../utils/failureMessages');
 
 const router = express.Router();
 
 const hasTranscriptContent = (transcript) => Array.isArray(transcript?.transcript) && transcript.transcript.length > 0;
-
-const getUserSafeFailureReason = (error) => {
-    if (error?.code === 'TRANSCRIPTION_PARSE_FAILED') {
-        return 'Video import/download succeeded, but transcription failed because Gemini returned invalid JSON. Retry transcription to try again.';
-    }
-    if (error?.code === 'JOB_CANCELLED') {
-        return 'Transcription retry was cancelled.';
-    }
-    return 'Video import/download succeeded, but transcription failed while talking to Gemini. Retry transcription to try again.';
-};
 
 async function runRetryTranscription(transcriptId, mp3Path) {
     const jobType = 'retry-transcription';
@@ -128,8 +119,11 @@ router.post('/:transcriptId', async (req, res) => {
                 if (error?.code === 'JOB_CANCELLED' || await isTranscriptCancelRequested(transcriptId)) {
                     throw error;
                 }
+                const failure = classifyTranscriptionFailure(error);
+                error.publicCode = failure.code;
+                error.publicMessage = failure.message;
                 await Transcript.findByIdAndUpdate(transcriptId, {
-                    failureReason: getUserSafeFailureReason(error),
+                    failureReason: failure.message,
                     failedAt: new Date().toISOString(),
                 });
                 throw error;
