@@ -406,10 +406,10 @@ Each service includes health checks that can be monitored:
 docker-compose ps
 
 # Manual health check
-curl http://localhost:8080/health  # Backend
-curl http://localhost:3000/api/health  # Frontend
-curl http://localhost/health  # Nginx
-curl http://localhost/api/health  # Backend through Nginx
+curl http://127.0.0.1:8080/health  # Backend
+curl http://127.0.0.1:3000/api/health  # Frontend
+curl http://$APP_DOMAIN/health  # Host Nginx
+curl http://$APP_DOMAIN/api/health  # Backend through host Nginx
 ```
 
 ### Development vs Production
