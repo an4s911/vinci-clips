@@ -90,7 +90,8 @@ docker compose down -v
 
 ## Local Production Build Test
 
-Use the HTTP-only nginx config locally. The HTTPS config expects real Let's Encrypt certificate files for `APP_DOMAIN`, so it is meant for the VPS after the first certificate has been issued.
+The production Compose file runs the app/data containers and publishes the
+frontend and backend on localhost for a host reverse proxy.
 
 ### 1. Configure Local Production Env
 
@@ -112,28 +113,28 @@ CHUNK_CONCURRENCY=1
 ### 2. Prepare Local Persistent Directories
 
 ```bash
-mkdir -p backend/uploads backend/storage backend/temp backend/cache backend/logs certbot/conf certbot/www
+mkdir -p backend/uploads backend/storage backend/temp backend/cache backend/logs
 ```
 
 ### 3. Start Local Production Stack
 
 ```bash
-NGINX_CONF=./nginx/nginx.http.conf docker compose --env-file .env.prod.local -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.prod.local -f docker-compose.prod.yml up -d --build
 ```
 
 ### 4. Test Local Production Stack
 
 ```bash
 docker compose --env-file .env.prod.local -f docker-compose.prod.yml ps
-curl http://localhost/health
-curl http://localhost/api/health
+curl http://127.0.0.1:8080/health
+curl -I http://127.0.0.1:3000
 docker compose --env-file .env.prod.local -f docker-compose.prod.yml exec redis redis-cli -a localredispassword ping
 ```
 
 Open:
 
 ```text
-http://localhost/upload
+http://127.0.0.1:3000/upload
 ```
 
 ### 5. Stop Local Production Stack
@@ -195,7 +196,7 @@ CHUNK_CONCURRENCY=4
 Run this once on the VPS from the project root:
 
 ```bash
-mkdir -p backend/uploads backend/storage backend/temp backend/cache backend/logs certbot/conf certbot/www
+mkdir -p backend/uploads backend/storage backend/temp backend/cache backend/logs
 sudo chown -R 1001:1001 backend/uploads backend/storage backend/temp backend/cache backend/logs
 ```
 
@@ -216,48 +217,92 @@ YTDLP_COOKIES_PATH=/app/storage/yt-dlp-cookies.txt
 Set `YTDLP_USER_AGENT` only when the cookies require the same browser user-agent
 that exported them.
 
-### 3. First Boot With HTTP-Only Nginx
+### 3. Install Host Nginx and Certbot
 
-Start the stack with the HTTP config so Let's Encrypt can validate the domain:
-
-```bash
-NGINX_CONF=./nginx/nginx.http.conf docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
-```
-
-### 4. Issue the First Certificate
-
-DNS for `APP_DOMAIN` must already point to the VPS before this command runs.
+Host Nginx owns public ports 80 and 443. Host Certbot manages certificates in
+`/etc/letsencrypt` and renews them with the normal system timer.
 
 ```bash
-docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm --entrypoint certbot certbot \
-  certonly --webroot \
-  -w /var/www/certbot \
-  -d "$APP_DOMAIN" \
-  --email "$LETSENCRYPT_EMAIL" \
-  --agree-tos \
-  --no-eff-email
+sudo apt-get update
+sudo apt-get install -y nginx certbot python3-certbot-nginx
 ```
 
-### 5. Switch to HTTPS Nginx
+### 4. Enable the Host Nginx Site
+
+Copy the HTTP-only site config, replace `example.com` with `APP_DOMAIN`, and
+enable it. Host Nginx must be serving this HTTP site before `certbot --nginx`
+can add HTTPS automatically.
 
 ```bash
-NGINX_CONF=./nginx/nginx.https.conf docker compose --env-file .env.prod -f docker-compose.prod.yml up -d nginx
+sudo cp nginx/nginx.conf /etc/nginx/sites-available/vinci-clips
+sudo sed -i "s/example.com/$APP_DOMAIN/g" /etc/nginx/sites-available/vinci-clips
+sudo ln -sf /etc/nginx/sites-available/vinci-clips /etc/nginx/sites-enabled/vinci-clips
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl enable --now nginx
+sudo systemctl reload nginx
 ```
 
-The `certbot` service runs an automatic renewal loop. The `nginx` service reloads periodically so renewed certificates are picked up without mounting the Docker socket.
+### 5. Migrate an Existing Docker Certbot Certificate
 
-### 6. Test Renewal
+If this app already has certificates under `certbot/conf`, copy them once into
+the host Certbot location:
 
 ```bash
-docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm --entrypoint certbot certbot renew --dry-run
+sudo rsync -a certbot/conf/ /etc/letsencrypt/
+sudo certbot certificates
 ```
+
+If `certbot renew --dry-run` fails with a 404 while Docker Nginx is still
+serving port 80, that is expected. Complete the host Nginx cutover first, then
+run Certbot with the Nginx plugin.
+
+### 6. Start the App Stack
+
+Remove the old Docker Nginx and Docker Certbot containers, then start the app
+stack. The production Compose file publishes only loopback ports for host Nginx.
+
+```bash
+docker rm -f vinci-clips-nginx-prod vinci-clips-certbot-prod 2>/dev/null || true
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build --remove-orphans
+```
+
+```bash
+sudo systemctl enable --now nginx
+sudo systemctl reload nginx
+```
+
+The host Nginx config proxies to the app containers through loopback ports:
+
+```text
+127.0.0.1:3000 -> frontend
+127.0.0.1:8080 -> backend
+```
+
+### 7. Add HTTPS With Host Certbot
+
+After the HTTP site works, let Certbot update the enabled Nginx site with the
+443 server and certificate paths:
+
+```bash
+sudo certbot --nginx -d "$APP_DOMAIN"
+```
+
+Then verify renewal:
+
+```bash
+sudo certbot renew --dry-run
+```
+
+Host Certbot installs a system timer for automatic renewal. With
+`python3-certbot-nginx`, Certbot can reload Nginx after successful renewals.
 
 This will start:
-- **Frontend + Backend**: proxied internally through Nginx
-- **Public HTTP/HTTPS**: ports 80 and 443 on the Nginx container only
+- **Frontend + Backend**: published on `127.0.0.1` for host Nginx
+- **Public HTTP/HTTPS**: ports 80 and 443 on host Nginx
 - **Redis**: internal Docker network only, password-protected
 
-### 7. Production Monitoring
+### 8. Production Monitoring
 
 ```bash
 # Check service status
@@ -270,7 +315,7 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f
 docker stats
 ```
 
-### 8. Verify Production Deployment
+### 9. Verify Production Deployment
 
 ```bash
 curl http://$APP_DOMAIN/health

@@ -83,6 +83,8 @@ services:
       YTDLP_USER_AGENT: ${YTDLP_USER_AGENT:-}
     expose:
       - "8080"
+    ports:
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8080}:8080"
     volumes:
       - ./backend/uploads:/app/uploads
       - ./backend/storage:/app/storage
@@ -118,6 +120,8 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
     expose:
       - "3000"
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_started
@@ -132,66 +136,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  nginx:
-    image: nginx:alpine
-    container_name: vinci-clips-nginx-prod
-    restart: always
-    command: |
-      /bin/sh -c "envsubst '$$APP_DOMAIN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf &&
-        (while :; do sleep 6h; nginx -s reload; done) &
-        nginx -g 'daemon off;'"
-    environment:
-      APP_DOMAIN: ${APP_DOMAIN:-localhost}
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ${NGINX_CONF:-./nginx/nginx.https.conf}:/etc/nginx/nginx.conf.template:ro
-      - ./certbot/conf:/etc/letsencrypt:ro
-      - ./certbot/www:/var/www/certbot:ro
-      - nginx_logs:/var/log/nginx
-    depends_on:
-      - frontend
-      - backend
-    networks:
-      - vinci-network
-    mem_limit: 512m
-    cpus: "0.5"
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost/health || exit 1"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  certbot:
-    image: certbot/certbot
-    container_name: vinci-clips-certbot-prod
-    restart: unless-stopped
-    entrypoint: /bin/sh
-    command: |
-      -c 'trap exit TERM;
-        while :; do
-          certbot renew --webroot -w /var/www/certbot --quiet;
-          sleep 12h & wait $$!;
-        done'
-    volumes:
-      - ./certbot/conf:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
-    networks:
-      - vinci-network
-    mem_limit: 256m
-    cpus: "0.25"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
 networks:
   vinci-network:
     driver: bridge
@@ -200,6 +144,4 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
-    driver: local
-  nginx_logs:
     driver: local
