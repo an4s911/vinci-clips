@@ -178,7 +178,7 @@ export default function BulkEditModal({
     const [styles, setStyles] = useState<CaptionStyle[]>([]);
     const [fetching, setFetching] = useState(false);
 
-    const [reframeEnabled, setReframeEnabled] = useState(false);
+    const [reframeEnabled, setReframeEnabled] = useState(true);
     const [captionsEnabled, setCaptionsEnabled] = useState(true);
     const [hookEnabled, setHookEnabled] = useState(true);
 

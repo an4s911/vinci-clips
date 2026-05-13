@@ -5,11 +5,12 @@ import axios from 'axios';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useParams, useRouter } from 'next/navigation';
 import ReframeModal from '@/components/ReframeModal';
 import CaptionGenerator from '@/components/CaptionGenerator';
 import BulkEditModal from '@/components/BulkEditModal';
-import { AlertCircle, CheckSquare, Download, ExternalLink, Flame, Loader2, RefreshCcw, Save, Square, StopCircle, Trash2, Wand2 } from 'lucide-react';
+import { AlertCircle, CheckSquare, Download, Eye, ExternalLink, Flame, Loader2, RefreshCcw, Save, Square, StopCircle, Trash2, Wand2 } from 'lucide-react';
 import StreamerGameplayCrop from '@/components/StreamerGameplayCrop';
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 interface TranscriptSegment {
@@ -123,6 +124,7 @@ export default function TranscriptDetailPage() {
     const [isCaptionModalOpen, setIsCaptionModalOpen] = useState(false);
     const [captionModalClipIndexes, setCaptionModalClipIndexes] = useState<number[]>([]);
     const [sortOrder, setSortOrder] = useState<'virality' | 'order' | 'duration'>('virality');
+    const [previewVideo, setPreviewVideo] = useState<{ clipIndex: number; video: ClipVideo } | null>(null);
     const params = useParams();
     const router = useRouter();
     const id = params.id;
@@ -486,6 +488,17 @@ export default function TranscriptDetailPage() {
         setIsCaptionModalOpen(true);
     };
 
+    const openPreviewModal = (clipIndex: number, video: ClipVideo) => {
+        setPreviewVideo({ clipIndex, video });
+    };
+
+    const closePreviewModal = () => setPreviewVideo(null);
+
+    const deleteClipVersionFromPreview = async (clipIndex: number, video: ClipVideo) => {
+        await deleteClipVersion(clipIndex, video);
+        closePreviewModal();
+    };
+
     const getViralityBadgeClass = (score?: number) => {
         if (!score) return 'bg-slate-100 text-slate-600';
         if (score >= 80) return 'bg-red-100 text-red-700';
@@ -516,6 +529,11 @@ export default function TranscriptDetailPage() {
     const formatVersionDate = (value: string) => {
         const date = new Date(value);
         return Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleString();
+    };
+
+    const getVideoLabel = (video: ClipVideo, isPrimary: boolean) => {
+        const parts = [isPrimary ? 'Primary' : 'Version', video.type, video.platformName].filter(Boolean);
+        return parts.join(' · ');
     };
 
     const retryTranscription = async () => {
@@ -552,6 +570,11 @@ export default function TranscriptDetailPage() {
     if (!transcript) {
         return <div className="flex justify-center items-center h-screen">Transcript not found.</div>;
     }
+
+    const previewClip = previewVideo ? transcript.clips[previewVideo.clipIndex] : null;
+    const previewIsPrimary = Boolean(
+        previewVideo && generatedClips[previewVideo.clipIndex]?.id === previewVideo.video.id
+    );
 
     return (
         <main className="container mx-auto p-8">
@@ -793,53 +816,64 @@ export default function TranscriptDetailPage() {
                                                 )}
 
                                                 {/* Primary actions */}
-                                                <div className="flex flex-wrap gap-1.5 mt-auto pt-1" onClick={e => e.stopPropagation()}>
+                                                <div className="flex flex-wrap items-center gap-1 mt-auto pt-1" onClick={e => e.stopPropagation()}>
                                                     {clipGenerating ? (
-                                                        <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
+                                                        <Button size="sm" variant="outline" className="h-7 px-2 text-xs shrink-0"
                                                             onClick={() => cancelClipGeneration(index)}
                                                             disabled={cancellingClips[index] || clip.generation?.status === 'cancelling'}
                                                         >
                                                             <StopCircle className="mr-1 h-3 w-3" />
                                                             {clip.generation?.status === 'cancelling' ? 'Stopping…' : 'Stop'}
                                                         </Button>
-                                                    ) : (
-                                                        <Button size="sm" className="h-7 px-2 text-xs"
+                                                    ) : !primaryVideo ? (
+                                                        <Button size="sm" className="h-7 px-2 text-xs shrink-0"
                                                             onClick={() => generateVideoClip(index)}
                                                             disabled={generatingClips[index]}
                                                         >
-                                                            {generatingClips[index] ? 'Generating…' : primaryVideo ? 'Regenerate' : 'Generate'}
+                                                            {generatingClips[index] ? 'Generating…' : 'Generate'}
                                                         </Button>
-                                                    )}
+                                                    ) : null}
                                                     {primaryVideo && (
                                                         <>
-                                                            <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
+                                                            <Button size="sm" variant="outline" className="h-7 px-2 text-xs shrink-0"
+                                                                onClick={() => openPreviewModal(index, primaryVideo)}
+                                                            >
+                                                                <Eye className="mr-1 h-3 w-3" />
+                                                                Preview
+                                                            </Button>
+                                                            {!clipGenerating && (
+                                                                <Button size="sm" className="h-7 px-2 text-xs shrink-0"
+                                                                    onClick={() => generateVideoClip(index)}
+                                                                    disabled={generatingClips[index]}
+                                                                >
+                                                                    {generatingClips[index] ? 'Generating…' : 'Regenerate'}
+                                                                </Button>
+                                                            )}
+                                                            <Button size="sm" variant="outline" className="h-7 px-2 text-xs shrink-0"
                                                                 onClick={() => openCaptionModal([index])}
                                                             >
                                                                 Edit
                                                             </Button>
-                                                            <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
+                                                            <Button size="sm" variant="outline" className="h-7 px-2 text-xs shrink-0"
                                                                 onClick={() => openReframeModal(primaryVideo, index)}
                                                             >
                                                                 <Wand2 className="h-3 w-3" />
                                                             </Button>
-                                                            <Button asChild size="sm" variant="outline" className="h-7 px-2 text-xs">
-                                                                <a href={`${API_URL}${primaryVideo.url}`} download>
-                                                                    <Download className="h-3 w-3" />
-                                                                </a>
-                                                            </Button>
-                                                            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-destructive hover:text-destructive"
-                                                                onClick={() => deleteClipVersion(index, primaryVideo)}
-                                                                disabled={deletingVersions[`${index}:${primaryVideo.id}`]}
-                                                            >
-                                                                <Trash2 className="h-3 w-3" />
-                                                            </Button>
+                                                            <span className="inline-flex shrink-0 items-center gap-1">
+                                                                <Button asChild size="sm" variant="outline" className="h-7 px-2 text-xs">
+                                                                    <a href={`${API_URL}${primaryVideo.url}`} download>
+                                                                        <Download className="h-3 w-3" />
+                                                                    </a>
+                                                                </Button>
+                                                                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-destructive transition-colors hover:bg-destructive hover:text-white focus-visible:ring-destructive"
+                                                                    onClick={() => deleteClipVersion(index, primaryVideo)}
+                                                                    disabled={deletingVersions[`${index}:${primaryVideo.id}`]}
+                                                                >
+                                                                    <Trash2 className="h-3 w-3" />
+                                                                </Button>
+                                                            </span>
                                                         </>
                                                     )}
-                                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs"
-                                                        onClick={() => seekToClip(clip)}
-                                                    >
-                                                        Preview
-                                                    </Button>
                                                 </div>
 
                                                 {/* Hook — collapsible */}
@@ -902,19 +936,24 @@ export default function TranscriptDetailPage() {
                                                                         <span className="text-slate-500">{formatVersionDate(version.createdAt)}</span>
                                                                     </div>
                                                                     <video controls src={`${API_URL}${version.url}`} className="w-full rounded border bg-black" style={{ maxHeight: '100px' }} />
-                                                                    <div className="flex flex-wrap gap-1">
-                                                                        <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => openReframeModal(version, index)}>
+                                                                    <div className="flex flex-wrap items-center gap-1">
+                                                                        <Button size="sm" variant="outline" className="h-6 px-2 text-xs shrink-0" onClick={() => openPreviewModal(index, version)}>
+                                                                            <Eye className="mr-1 h-3 w-3" />Preview
+                                                                        </Button>
+                                                                        <Button size="sm" variant="outline" className="h-6 px-2 text-xs shrink-0" onClick={() => openReframeModal(version, index)}>
                                                                             <Wand2 className="mr-1 h-3 w-3" />Reframe
                                                                         </Button>
-                                                                        <Button asChild size="sm" variant="outline" className="h-6 px-2 text-xs">
-                                                                            <a href={`${API_URL}${version.url}`} download={version.filename}><Download className="mr-1 h-3 w-3" />Download</a>
-                                                                        </Button>
-                                                                        <Button size="sm" variant="destructive" className="h-6 px-2 text-xs"
-                                                                            onClick={() => deleteClipVersion(index, version)}
-                                                                            disabled={deletingVersions[`${index}:${version.id}`]}
-                                                                        >
-                                                                            <Trash2 className="h-3 w-3" />
-                                                                        </Button>
+                                                                        <span className="inline-flex shrink-0 items-center gap-1">
+                                                                            <Button asChild size="sm" variant="outline" className="h-6 px-2 text-xs">
+                                                                                <a href={`${API_URL}${version.url}`} download={version.filename}><Download className="mr-1 h-3 w-3" />Download</a>
+                                                                            </Button>
+                                                                            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-destructive transition-colors hover:bg-destructive hover:text-white hover:shadow-sm focus-visible:ring-destructive"
+                                                                                onClick={() => deleteClipVersion(index, version)}
+                                                                                disabled={deletingVersions[`${index}:${version.id}`]}
+                                                                            >
+                                                                                <Trash2 className="h-3 w-3" />
+                                                                            </Button>
+                                                                        </span>
                                                                     </div>
                                                                 </div>
                                                             ))}
@@ -956,6 +995,113 @@ export default function TranscriptDetailPage() {
                     clips={transcript.clips as any}
                     onComplete={fetchTranscript}
                 />
+            )}
+
+            {/* Clip Preview Modal */}
+            {previewVideo && previewClip && (
+                <Dialog open={Boolean(previewVideo)} onOpenChange={(open) => !open && closePreviewModal()}>
+                    <DialogContent className="max-h-[92vh] max-w-6xl overflow-y-auto p-0">
+                        <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_280px]">
+                            <div className="min-w-0 bg-black p-4 sm:p-6">
+                                <video
+                                    controls
+                                    autoPlay
+                                    src={`${API_URL}${previewVideo.video.url}`}
+                                    className="h-auto max-h-[78vh] w-full rounded-md bg-black object-contain"
+                                />
+                            </div>
+                            <aside className="space-y-4 border-t bg-background p-4 lg:border-l lg:border-t-0">
+                                <DialogHeader className="pr-8">
+                                    <DialogTitle className="text-base leading-snug">{previewClip.title}</DialogTitle>
+                                    <DialogDescription>
+                                        {getVideoLabel(previewVideo.video, previewIsPrimary)}
+                                    </DialogDescription>
+                                </DialogHeader>
+
+                                <div className="grid gap-2 text-xs text-muted-foreground">
+                                    <div className="flex justify-between gap-3">
+                                        <span>Duration</span>
+                                        <span className="font-medium text-foreground">
+                                            {formatTime(previewClip.totalDuration || (previewClip.end || 0) - (previewClip.start || 0))}
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between gap-3">
+                                        <span>Created</span>
+                                        <span className="text-right font-medium text-foreground">{formatVersionDate(previewVideo.video.createdAt)}</span>
+                                    </div>
+                                    {previewVideo.video.aspectRatio && (
+                                        <div className="flex justify-between gap-3">
+                                            <span>Aspect</span>
+                                            <span className="font-medium text-foreground">{previewVideo.video.aspectRatio}</span>
+                                        </div>
+                                    )}
+                                    {previewVideo.video.captions?.enabled && (
+                                        <div className="flex justify-between gap-3">
+                                            <span>Captions</span>
+                                            <span className="font-medium text-foreground">{previewVideo.video.captions.style || 'Enabled'}</span>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="grid gap-2">
+                                    {previewIsPrimary && (
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => {
+                                                closePreviewModal();
+                                                openCaptionModal([previewVideo.clipIndex]);
+                                            }}
+                                        >
+                                            Edit
+                                        </Button>
+                                    )}
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => {
+                                            const { clipIndex, video } = previewVideo;
+                                            closePreviewModal();
+                                            openReframeModal(video, clipIndex);
+                                        }}
+                                    >
+                                        <Wand2 className="mr-2 h-4 w-4" />
+                                        Reframe
+                                    </Button>
+                                    <Button asChild size="sm" variant="outline">
+                                        <a href={`${API_URL}${previewVideo.video.url}`} download={previewVideo.video.filename}>
+                                            <Download className="mr-2 h-4 w-4" />
+                                            Download
+                                        </a>
+                                    </Button>
+                                    {transcript.videoUrl && (
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => {
+                                                closePreviewModal();
+                                                seekToClip(previewClip);
+                                            }}
+                                        >
+                                            <ExternalLink className="mr-2 h-4 w-4" />
+                                            Source segment
+                                        </Button>
+                                    )}
+                                    <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        className="transition-colors hover:bg-red-700 hover:text-white hover:shadow-sm focus-visible:ring-red-700"
+                                        onClick={() => deleteClipVersionFromPreview(previewVideo.clipIndex, previewVideo.video)}
+                                        disabled={deletingVersions[`${previewVideo.clipIndex}:${previewVideo.video.id}`]}
+                                    >
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        {deletingVersions[`${previewVideo.clipIndex}:${previewVideo.video.id}`] ? 'Deleting...' : 'Delete'}
+                                    </Button>
+                                </div>
+                            </aside>
+                        </div>
+                    </DialogContent>
+                </Dialog>
             )}
 
             {/* Reframe Modal */}
