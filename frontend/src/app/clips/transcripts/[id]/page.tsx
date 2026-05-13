@@ -8,7 +8,8 @@ import { Badge } from '@/components/ui/badge';
 import { useParams, useRouter } from 'next/navigation';
 import ReframeModal from '@/components/ReframeModal';
 import CaptionGenerator from '@/components/CaptionGenerator';
-import { AlertCircle, Download, ExternalLink, Loader2, RefreshCcw, Save, StopCircle, Trash2, Wand2 } from 'lucide-react';
+import BulkEditModal from '@/components/BulkEditModal';
+import { AlertCircle, CheckSquare, Download, ExternalLink, Flame, Loader2, RefreshCcw, Save, Square, StopCircle, Trash2, Wand2 } from 'lucide-react';
 import StreamerGameplayCrop from '@/components/StreamerGameplayCrop';
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 interface TranscriptSegment {
@@ -64,10 +65,13 @@ interface ClipHook {
 
 interface Clip {
     title: string;
-    start?: number; // For single segment clips
-    end?: number;   // For single segment clips
-    segments?: ClipSegment[]; // For multi-segment clips
+    start?: number;
+    end?: number;
+    segments?: ClipSegment[];
     totalDuration?: number;
+    viralityScore?: number;
+    subScores?: { hook?: number; payoff?: number; emotion?: number; novelty?: number; clarity?: number } | null;
+    tags?: string[];
     hook: ClipHook;
     videos?: ClipVideo[];
     primaryVideoId?: string | null;
@@ -114,6 +118,11 @@ export default function TranscriptDetailPage() {
     const [retryingTranscript, setRetryingTranscript] = useState(false);
     const [cancellingTranscript, setCancellingTranscript] = useState(false);
     const [cancellingClips, setCancellingClips] = useState<{[key: number]: boolean}>({});
+    const [selectedClipIndexes, setSelectedClipIndexes] = useState<Set<number>>(new Set());
+    const [bulkDownloading, setBulkDownloading] = useState(false);
+    const [isCaptionModalOpen, setIsCaptionModalOpen] = useState(false);
+    const [captionModalClipIndexes, setCaptionModalClipIndexes] = useState<number[]>([]);
+    const [sortOrder, setSortOrder] = useState<'virality' | 'order' | 'duration'>('virality');
     const params = useParams();
     const router = useRouter();
     const id = params.id;
@@ -414,6 +423,75 @@ export default function TranscriptDetailPage() {
         setSelectedClipForReframe(null);
     };
 
+    const toggleClipSelect = (index: number) => {
+        setSelectedClipIndexes(prev => {
+            const next = new Set(prev);
+            if (next.has(index)) next.delete(index);
+            else next.add(index);
+            return next;
+        });
+    };
+
+    const selectAllClips = () => {
+        if (!transcript) return;
+        setSelectedClipIndexes(new Set(transcript.clips.map((_, i) => i)));
+    };
+
+    const clearClipSelection = () => setSelectedClipIndexes(new Set());
+
+    const bulkDownload = async () => {
+        if (!transcript || selectedClipIndexes.size === 0) return;
+        setBulkDownloading(true);
+        setError('');
+        try {
+            const clips = Array.from(selectedClipIndexes)
+                .flatMap(idx => {
+                    const v = generatedClips[idx];
+                    return v ? [{ transcriptId: transcript._id, clipIndex: idx, videoId: v.id }] : [];
+                });
+            if (clips.length === 0) {
+                setError('No generated videos in selection.');
+                return;
+            }
+            const res = await axios.post(`${API_URL}/clips/clips/download-zip`, { clips }, { responseType: 'blob' });
+            const url = URL.createObjectURL(res.data);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${transcript.originalFilename}_clips.zip`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (err: any) {
+            setError(err.response?.data?.error || 'Failed to download clips.');
+        } finally {
+            setBulkDownloading(false);
+        }
+    };
+
+    const openCaptionModal = (indexes: number[]) => {
+        setCaptionModalClipIndexes(indexes);
+        setIsCaptionModalOpen(true);
+    };
+
+    const getViralityBadgeClass = (score?: number) => {
+        if (!score) return 'bg-slate-100 text-slate-600';
+        if (score >= 80) return 'bg-red-100 text-red-700';
+        if (score >= 60) return 'bg-orange-100 text-orange-700';
+        return 'bg-slate-100 text-slate-600';
+    };
+
+    const getSortedClipIndexes = () => {
+        if (!transcript) return [];
+        const indexes = transcript.clips.map((_, i) => i);
+        if (sortOrder === 'virality') {
+            return indexes.sort((a, b) => (transcript.clips[b].viralityScore || 0) - (transcript.clips[a].viralityScore || 0));
+        }
+        if (sortOrder === 'duration') {
+            const dur = (clip: Clip) => clip.totalDuration || (clip.end || 0) - (clip.start || 0);
+            return indexes.sort((a, b) => dur(transcript.clips[a]) - dur(transcript.clips[b]));
+        }
+        return indexes;
+    };
+
     const getPreviousVersions = (clip: Clip, primaryVideo?: ClipVideo) => {
         if (!clip.videos || clip.videos.length === 0 || !primaryVideo) return [];
         return clip.videos
@@ -545,11 +623,11 @@ export default function TranscriptDetailPage() {
                             </div>
                         </details>
                         <div className="mt-8">
-                            <div className="flex items-center justify-between mb-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                                 <h3 className="text-2xl font-bold">Clip Analysis & Generation</h3>
-                                <div className="flex gap-2">
-                                    <Button 
-                                        onClick={generateClips} 
+                                <div className="flex flex-wrap gap-2">
+                                    <Button
+                                        onClick={generateClips}
                                         disabled={analyzing || !canAnalyzeTranscript}
                                         variant="outline"
                                     >
@@ -562,8 +640,8 @@ export default function TranscriptDetailPage() {
                                     >
                                         Generate Remaining{remainingClipCount ? ` (${remainingClipCount})` : ''}
                                     </Button>
-                                    <Button 
-                                        onClick={clearAnalyzedClips} 
+                                    <Button
+                                        onClick={clearAnalyzedClips}
                                         disabled={!canAnalyzeTranscript || !transcript?.clips || transcript.clips.length === 0}
                                         variant="destructive"
                                         size="sm"
@@ -572,6 +650,44 @@ export default function TranscriptDetailPage() {
                                     </Button>
                                 </div>
                             </div>
+                            {transcript.clips && transcript.clips.length > 0 && (
+                                <div className="flex flex-wrap items-center gap-3 mb-4 pb-4 border-b">
+                                    <div className="flex items-center gap-2">
+                                        <select
+                                            className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+                                            value={sortOrder}
+                                            onChange={e => setSortOrder(e.target.value as 'virality' | 'order' | 'duration')}
+                                        >
+                                            <option value="virality">Sort: Virality</option>
+                                            <option value="order">Sort: Timeline order</option>
+                                            <option value="duration">Sort: Duration</option>
+                                        </select>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <Button size="sm" variant="outline" onClick={selectAllClips}>
+                                            <CheckSquare className="mr-1 h-3 w-3" />
+                                            Select all
+                                        </Button>
+                                        {selectedClipIndexes.size > 0 && (
+                                            <Button size="sm" variant="ghost" onClick={clearClipSelection}>
+                                                <Square className="mr-1 h-3 w-3" />
+                                                Clear ({selectedClipIndexes.size})
+                                            </Button>
+                                        )}
+                                    </div>
+                                    {selectedClipIndexes.size > 0 && (
+                                        <div className="flex items-center gap-2">
+                                            <Button size="sm" variant="outline" onClick={bulkDownload} disabled={bulkDownloading}>
+                                                {bulkDownloading ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Download className="mr-1 h-3 w-3" />}
+                                                Download ({selectedClipIndexes.size})
+                                            </Button>
+                                            <Button size="sm" variant="outline" onClick={() => openCaptionModal(Array.from(selectedClipIndexes))}>
+                                                Bulk Edit ({selectedClipIndexes.size})
+                                            </Button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                             {error && transcript && (
                                 <div className="mb-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded">
                                     {error}
@@ -584,22 +700,45 @@ export default function TranscriptDetailPage() {
                             ) : null}
                             {transcript.analysisMetadata?.analyzedAt && transcript.clips?.length ? (
                                 <div className="mb-4 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-950">
-                                    Clips were analyzed automatically. The top {transcript.analysisMetadata.autoGenerateLimit || 6} are generated automatically; the rest can be generated manually.
+                                    Clips analyzed automatically. All {transcript.clips.length} are queued for generation.
                                 </div>
                             ) : null}
                             {!canAnalyzeTranscript ? (
                                 <p className="mt-4 text-muted-foreground">Clip analysis is unavailable until transcript content exists.</p>
                             ) : transcript.clips && transcript.clips.length > 0 ? (
                                 <div className="mt-4 space-y-4">
-	                                    {transcript.clips.map((clip, index) => {
+	                                    {getSortedClipIndexes().map((index) => {
+                                            const clip = transcript.clips[index];
 	                                        const primaryVideo = generatedClips[index] as ClipVideo | undefined;
 	                                        const previousVersions = getPreviousVersions(clip, primaryVideo);
                                             const clipGenerating = isClipGenerating(clip);
+                                            const isSelected = selectedClipIndexes.has(index);
 
 	                                        return (
-	                                        <div key={index} className="p-4 bg-muted rounded-lg transition-colors">
+	                                        <div key={index} className={`p-4 bg-muted rounded-lg transition-colors border-2 ${isSelected ? 'border-primary' : 'border-transparent'}`}>
 	                                            <div className="flex items-start justify-between mb-2">
-	                                                <div className="font-semibold flex-1">{clip.title}</div>
+                                                    <div className="flex items-start gap-3 flex-1 min-w-0">
+                                                        <button
+                                                            onClick={() => toggleClipSelect(index)}
+                                                            className="mt-0.5 flex-shrink-0 text-muted-foreground hover:text-primary"
+                                                        >
+                                                            {isSelected ? <CheckSquare className="h-5 w-5 text-primary" /> : <Square className="h-5 w-5" />}
+                                                        </button>
+                                                        <div className="min-w-0">
+                                                            <div className="font-semibold truncate">{clip.title}</div>
+                                                            <div className="flex flex-wrap items-center gap-2 mt-1">
+                                                                {clip.viralityScore !== undefined && (
+                                                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getViralityBadgeClass(clip.viralityScore)}`}>
+                                                                        {clip.viralityScore >= 80 && <Flame className="h-3 w-3" />}
+                                                                        {clip.viralityScore}
+                                                                    </span>
+                                                                )}
+                                                                {clip.tags?.map(tag => (
+                                                                    <span key={tag} className="px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground text-xs">{tag}</span>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                     <div className="ml-2 flex flex-wrap justify-end gap-2">
                                                         {clipGenerating ? (
                                                             <Button
@@ -619,6 +758,15 @@ export default function TranscriptDetailPage() {
 	                                                    >
 	                                                        {generatingClips[index] || clipGenerating ? 'Generating...' : 'Generate Clip'}
 	                                                    </Button>
+                                                        {generatedClips[index] && (
+                                                            <Button
+                                                                size="sm"
+                                                                variant="outline"
+                                                                onClick={() => openCaptionModal([index])}
+                                                            >
+                                                                Edit
+                                                            </Button>
+                                                        )}
                                                     </div>
 	                                            </div>
                                                 {clip.generation && clip.generation.status !== 'idle' ? (
@@ -849,6 +997,19 @@ export default function TranscriptDetailPage() {
                     />
                     <StreamerGameplayCrop transcriptId={transcript._id} videoUrl={`${API_URL}${transcript.videoUrl}`} />
                 </div>
+            )}
+
+            {/* Bulk Edit Modal */}
+            {transcript && (
+                <BulkEditModal
+                    isOpen={isCaptionModalOpen}
+                    onClose={() => setIsCaptionModalOpen(false)}
+                    transcriptId={transcript._id}
+                    clipIndexes={captionModalClipIndexes}
+                    generatedClips={generatedClips}
+                    clips={transcript.clips as any}
+                    onComplete={fetchTranscript}
+                />
             )}
 
             {/* Reframe Modal */}

@@ -1,5 +1,5 @@
 const Transcript = require('../models/Transcript');
-const { AUTO_GENERATE_LIMIT, analyzeTranscriptForClips } = require('./clipAnalysis');
+const { analyzeTranscriptForClips } = require('./clipAnalysis');
 const { generateSingleClipInBackground } = require('./clipGeneration');
 const { getPrimaryClipVideo, normalizeTranscriptClips } = require('./clipVideos');
 const {
@@ -20,7 +20,7 @@ function rankClipIndexes(clips) {
         .map(entry => entry.index);
 }
 
-async function queueAutoClipGeneration(transcriptId, limit = AUTO_GENERATE_LIMIT) {
+async function queueAutoClipGeneration(transcriptId) {
     let transcript = await Transcript.findById(transcriptId);
     const clips = normalizeTranscriptClips(transcript);
     const indexes = rankClipIndexes(clips)
@@ -28,8 +28,7 @@ async function queueAutoClipGeneration(transcriptId, limit = AUTO_GENERATE_LIMIT
             const clip = clips[index];
             const active = Boolean(clip.generation && ['queued', 'running', 'cancelling'].includes(clip.generation.status));
             return !active && !getPrimaryClipVideo(clip);
-        })
-        .slice(0, limit);
+        });
 
     const queuedClipIndexes = [];
     for (const clipIndex of indexes) {
@@ -55,7 +54,7 @@ async function analyzeAndAutoGenerateClips(transcriptId, options = {}) {
         }
 
         const analyzedTranscript = await analyzeTranscriptForClips(transcript);
-        const queuedClipIndexes = await queueAutoClipGeneration(transcriptId, options.limit || AUTO_GENERATE_LIMIT);
+        const queuedClipIndexes = await queueAutoClipGeneration(transcriptId);
         logVideoProcessing(transcriptId, 'completed', 'Automatic clip analysis and generation queued', {
             jobType: 'auto-clips',
             phase: 'completed',

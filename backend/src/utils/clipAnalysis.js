@@ -26,6 +26,20 @@ const CLIP_ANALYSIS_RESPONSE_SCHEMA = {
             hook: { type: 'STRING' },
             reason: { type: 'STRING' },
             viralityScore: { type: 'NUMBER' },
+            subScores: {
+                type: 'OBJECT',
+                properties: {
+                    hook: { type: 'NUMBER' },
+                    payoff: { type: 'NUMBER' },
+                    emotion: { type: 'NUMBER' },
+                    novelty: { type: 'NUMBER' },
+                    clarity: { type: 'NUMBER' },
+                },
+            },
+            tags: {
+                type: 'ARRAY',
+                items: { type: 'STRING' },
+            },
             languageFlag: { type: 'BOOLEAN' },
             languageReason: { type: 'STRING' },
             startSec: { type: 'NUMBER' },
@@ -52,6 +66,8 @@ const CLIP_ANALYSIS_RESPONSE_SCHEMA = {
             'hook',
             'reason',
             'viralityScore',
+            'subScores',
+            'tags',
             'languageFlag',
             'languageReason',
             'startSec',
@@ -152,8 +168,8 @@ function estimateCandidateCount(durationSec) {
     if (!Number.isFinite(durationSec) || durationSec <= 0) return 10;
     if (durationSec < 180) return 8;
     if (durationSec < 600) return 10;
-    if (durationSec < 1800) return 12;
-    return 16;
+    if (durationSec < 1800) return 16;
+    return 24;
 }
 
 function buildClipAnalysisPrompt({ transcriptDoc, transcriptChunks, candidateCount }) {
@@ -168,24 +184,47 @@ function buildClipAnalysisPrompt({ transcriptDoc, transcriptChunks, candidateCou
         ].join(' | '))
         .join('\n');
 
-    return `You are finding viral short-form clips from a timestamped transcript.
+    return `You are a viral short-form content strategist identifying the strongest clips from a timestamped transcript for TikTok, YouTube Shorts, and Instagram Reels.
 
-Goal: return the strongest ${candidateCount} clip candidates for TikTok, Reels, and YouTube Shorts. Prefer moments with a clear setup, payoff, surprise, disagreement, emotional reaction, useful insight, or funny mistake.
+## Your Goal
+Find the top ${candidateCount} moments that will perform best as standalone clips. Think like a creator with 10M followers: you are looking for moments that stop the scroll, create an emotional reaction, and leave viewers wanting more.
 
-Rules:
-- Use only timestamps from the transcript chunks. Do not invent timestamps.
-- Continuous clips are preferred. Multi-segment clips are allowed only when the segments form one coherent story.
-- Each final clip must be ${MIN_CLIP_DURATION_SEC}-${MAX_CLIP_DURATION_SEC} seconds total.
-- Choose complete thoughts. Start slightly before the setup and end after the payoff.
-- Avoid dead air, repeated filler, intros, outros, and vague context.
-- Rank clips by viral potential using viralityScore from 1-100.
-- Create a casual top-overlay hook, 3-10 words, that makes viewers want to keep watching.
-- Hooks should be specific and curiosity-driven, not generic summaries.
-- Flag clips containing profanity, slurs, or sexually explicit language in their selected transcript window.
+## Virality Scoring Rubric
+Score each clip 0-100 by summing these weighted sub-scores:
+
+1. **Hook Strength (0-30)**: Does the opening line immediately grab attention? Does the clip start mid-action or with a provocative statement? High score = viewer cannot scroll past without watching.
+2. **Payoff/Punchline (0-25)**: Is there a satisfying conclusion, surprise twist, or laugh? Does it deliver on the implicit promise of the opening?
+3. **Emotional Spike (0-15)**: Does it trigger laughter, shock, inspiration, cringe, awe, or anger? Neutral moments score 0.
+4. **Novelty/Insight (0-15)**: Does it teach something surprising, challenge a common belief, or offer a counterintuitive take? Generic advice scores 0.
+5. **Standalone Clarity (0-15)**: Can someone who has never seen the original video fully understand this clip without context? Full context = 15, requires prior knowledge = 0.
+
+Sum sub-scores to get viralityScore.
+
+## Clip Selection Rules
+- Use ONLY timestamps from the provided chunks. Never invent timestamps.
+- Prefer continuous clips (startSec/endSec). Use multi-segment clips ONLY when cutting dead air between two tightly related moments.
+- Each clip must be ${MIN_CLIP_DURATION_SEC}-${MAX_CLIP_DURATION_SEC} seconds total.
+- Start slightly before the setup moment, end after the payoff lands.
+- Reject: vague context, lengthy intros/outros, dead air >3 seconds, repeated filler.
+- Each clip must be self-contained — if the clip requires the viewer to know who/what is being referenced, expand the start to include that context or skip the clip.
+- No two clips should cover the same story beat (aggressive deduplication — prefer diversity of topics).
+
+## Hook Text Rules
+Write a 3-10 word top-overlay hook that will be displayed on screen. This is the MOST important element:
+- Use curiosity gaps ("The thing nobody tells you about X")
+- Use contrarian takes ("Everyone's wrong about X")
+- Use pattern interrupts ("Wait, WHAT?")
+- Use specific numbers or stakes ("Lost $50k because of this")
+- NEVER write: "In this clip...", "Watch as...", "This video shows...", "Here's how..."
+- The hook must match the tone and content of the specific moment, not the overall video.
+
+## Tags
+Assign 1-4 tags from: funny, insight, controversy, story, advice, mistake, reaction, debate, achievement, warning
+
+## Output
+Return JSON array sorted by viralityScore descending. For continuous clips use startSec+endSec. For multi-segment use segments[].
 
 Video duration: ${durationText}
-
-Return JSON only. For continuous clips, use startSec and endSec. For multi-segment clips, use segments.
 
 Timestamped transcript chunks:
 ${chunkText}`;
@@ -231,12 +270,33 @@ function rangesOverlapRatio(aRanges, bRanges) {
     return shortest > 0 ? overlap / shortest : 0;
 }
 
+function normalizeSubScores(subScores) {
+    if (!subScores || typeof subScores !== 'object') return null;
+    const clamp = (v, max) => Math.min(max, Math.max(0, Number(v) || 0));
+    return {
+        hook: clamp(subScores.hook, 30),
+        payoff: clamp(subScores.payoff, 25),
+        emotion: clamp(subScores.emotion, 15),
+        novelty: clamp(subScores.novelty, 15),
+        clarity: clamp(subScores.clarity, 15),
+    };
+}
+
+const VALID_TAGS = new Set(['funny', 'insight', 'controversy', 'story', 'advice', 'mistake', 'reaction', 'debate', 'achievement', 'warning']);
+
+function normalizeTags(tags) {
+    if (!Array.isArray(tags)) return [];
+    return tags.map(t => normalizeText(t).toLowerCase()).filter(t => VALID_TAGS.has(t)).slice(0, 4);
+}
+
 function toProcessedClip(suggestion, ranges, rank) {
     const hookText = normalizeText(suggestion.hook).slice(0, 120);
     const base = {
         title: normalizeText(suggestion.title).slice(0, 140) || `Clip ${rank}`,
         rank,
         viralityScore: normalizeScore(suggestion.viralityScore),
+        subScores: normalizeSubScores(suggestion.subScores),
+        tags: normalizeTags(suggestion.tags),
         reason: normalizeText(suggestion.reason).slice(0, 300),
         sourceChunkIds: Array.isArray(suggestion.sourceChunkIds)
             ? suggestion.sourceChunkIds.map(normalizeText).filter(Boolean).slice(0, 8)
@@ -312,7 +372,7 @@ async function analyzeTranscriptForClips(transcriptDoc, options = {}) {
             continue;
         }
 
-        if (acceptedRanges.some(existing => rangesOverlapRatio(existing, ranges) > 0.65)) {
+        if (acceptedRanges.some(existing => rangesOverlapRatio(existing, ranges) > 0.5)) {
             rejectedClipCount += 1;
             continue;
         }
@@ -343,7 +403,7 @@ async function analyzeTranscriptForClips(transcriptDoc, options = {}) {
             visibleClipCount: validatedClips.length,
             suggestedClipCount: sortedSuggestions.length,
             blockedWordSource: 'database',
-            promptVersion: 'timestamped-viral-v2',
+            promptVersion: 'viral-rubric-v3',
             analyzedAt: new Date().toISOString(),
             model: resolvedModel,
             autoGenerateLimit: AUTO_GENERATE_LIMIT,

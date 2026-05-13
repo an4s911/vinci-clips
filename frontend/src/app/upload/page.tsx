@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { useRouter } from 'next/navigation';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -34,6 +35,7 @@ interface Transcript {
 }
 
 export default function UploadClient() {
+  const router = useRouter();
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [progressText, setProgressText] = useState('');
@@ -223,11 +225,16 @@ export default function UploadClient() {
       const response = await axios.post(`${API_URL}/clips/import/url`, {
         url: importUrl.trim()
       });
-      
+
+      const transcriptId = response.data?.transcript?._id;
+      if (transcriptId) {
+        router.push(`/clips/transcripts/${transcriptId}`);
+        return;
+      }
+
       setMessage(response.data?.message || 'Import accepted. Processing in background.');
       setImportUrl('');
-      
-      // Refresh the recent transcripts list and start polling
+
       const refreshResponse = await axios.get(`${API_URL}/clips/transcripts`);
       setRecentTranscripts(refreshResponse.data.slice(0, 6));
       setIsPolling(true);

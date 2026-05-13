@@ -498,6 +498,7 @@ async function renderCaptionedVideo({
     outputPath,
     transcriptSegments,
     styleId,
+    hookStyleId,
     clipDefinition,
     clipTimeline,
     startTime,
@@ -510,6 +511,9 @@ async function renderCaptionedVideo({
 }) {
     const videoDimensions = videoDimensionsOverride || await probeVideoDimensions(inputPath);
     const resolvedStyle = await getResolvedStyle(styleId, videoDimensions);
+    const resolvedHookStyle = hookStyleId && hookStyleId !== styleId
+        ? await getResolvedStyle(hookStyleId, videoDimensions)
+        : resolvedStyle;
     const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
     const hookEnabled = Boolean(hook?.enabled && hookText);
 
@@ -538,7 +542,7 @@ async function renderCaptionedVideo({
 
     if (hookEnabled) {
         const hookPath = path.join(tempDir, `${path.basename(outputPath, path.extname(outputPath))}_hook.ass`);
-        fs.writeFileSync(hookPath, buildHookASSContent(hookText, resolvedStyle, videoDimensions));
+        fs.writeFileSync(hookPath, buildHookASSContent(hookText, resolvedHookStyle, videoDimensions));
         tempSubtitlePaths.push(hookPath);
         filters.push(buildASSSubtitleFilter(hookPath));
     }
@@ -610,5 +614,6 @@ module.exports = {
     convertColorToASS,
     convertToSRTTime,
     filterWordsByRange,
+    normalizeTranscriptWords,
     timeToSeconds,
 };
