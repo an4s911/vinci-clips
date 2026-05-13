@@ -264,7 +264,7 @@ async function persistAssetState(transcript, generatedClipUrl, updater) {
 // --- Express Routes ---
 router.post('/generate', async (req, res) => {
     try {
-        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, hook, clipDefinition, clipTimeline, clipIndex, processingMode, sourceVideoId } = req.body;
+        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, hook, hookStyleId, clipDefinition, clipTimeline, clipIndex, processingMode, sourceVideoId } = req.body;
         const captionsOnly = processingMode === 'captions-only';
         const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
         const normalizedHook = {
@@ -343,6 +343,7 @@ router.post('/generate', async (req, res) => {
                     outputPath: captionedOutputPath,
                     transcriptSegments: transcript.transcript,
                     styleId: captions.style,
+                    hookStyleId: hookStyleId || captions.style,
                     clipDefinition,
                     clipTimeline,
                     captionsEnabled: Boolean(captions?.enabled),
@@ -373,6 +374,7 @@ router.post('/generate', async (req, res) => {
                 outputPath: captionedOutputPath,
                 transcriptSegments: transcript.transcript,
                 styleId: captions.style,
+                hookStyleId: hookStyleId || captions.style,
                 clipDefinition,
                 clipTimeline,
                 captionsEnabled: Boolean(captions?.enabled),

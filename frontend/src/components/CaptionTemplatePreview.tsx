@@ -70,8 +70,10 @@ function getCaptionCSS(
     const shadow = template.shadow
         ? `${shadowDepth * textScale}px ${shadowDepth * textScale}px ${shadowDepth * 2 * textScale}px rgba(0,0,0,0.8)`
         : "none";
-    const bg = template.borderStyle === 3 && template.backColor ? template.backColor : "transparent";
-    const hasOutline = template.outlineWidth > 0;
+    const isOpaqueBox = template.borderStyle === 3;
+    const bg = isOpaqueBox && template.backColor ? template.backColor : "transparent";
+    const hasOutline = !isOpaqueBox && template.outlineWidth > 0;
+    const boxPadding = isOpaqueBox ? template.outlineWidth * textScale : 0;
     const fontSize = Math.max(8 * textScale, Math.round(layout.fontSize * 0.5 * textScale));
     const textAlign: "left" | "center" | "right" = col === 0 ? "left" : col === 2 ? "right" : "center";
 
@@ -105,6 +107,8 @@ function getCaptionCSS(
         fontFamily: fontFamilyCSS(template.fontName),
         color: template.fontColor,
         background: bg,
+        padding: boxPadding ? `${boxPadding}px ${boxPadding * 1.5}px` : undefined,
+        borderRadius: boxPadding ? 3 : undefined,
         textShadow: shadow,
         textTransform: template.uppercase ? "uppercase" : "none",
         letterSpacing: template.spacing ? template.spacing * textScale : 0,

@@ -248,6 +248,7 @@ export default function BulkEditModal({
                         detections: [],
                         cropParameters: null,
                         captions: captionsEnabled ? { enabled: true, style: captionStyleId } : { enabled: false },
+                        hookStyleId: hookEnabled ? hookStyleId : undefined,
                         hook: (hookEnabled && hookText) ? { enabled: true, text: hookText } : { enabled: false },
                     });
                 } else if (captionsEnabled) {

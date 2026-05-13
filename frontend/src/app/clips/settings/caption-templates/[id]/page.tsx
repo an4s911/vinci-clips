@@ -406,20 +406,27 @@ export default function CaptionTemplateEditorPage() {
                                     <ColorInput label="Text Color" value={template.fontColor} onChange={(v) => set("fontColor", v)} />
                                     <ColorInput label="Outline Color" value={template.outlineColor} onChange={(v) => set("outlineColor", v)} />
                                 </div>
-                                <NumberInput label="Outline Width" value={template.outlineWidth} onChange={(v) => set("outlineWidth", v)} min={0} max={10} step={0.1} />
                                 <div className="space-y-1">
                                     <Label className="text-xs text-muted-foreground">Border Style</Label>
                                     <div className="flex gap-2">
                                         {[{ v: 1, label: "Outline" }, { v: 3, label: "Opaque Box" }].map(({ v, label }) => (
-                                            <button key={v} onClick={() => set("borderStyle", v)}
+                                            <button key={v} onClick={() => {
+                                                set("borderStyle", v);
+                                                if (v === 3 && !template.backColor) set("backColor", "#000000");
+                                            }}
                                                 className={`flex-1 py-1.5 text-xs rounded-md border transition-colors ${template.borderStyle === v ? "bg-primary text-primary-foreground border-primary" : "border-input hover:border-gray-400"}`}>
                                                 {label}
                                             </button>
                                         ))}
                                     </div>
                                 </div>
-                                {template.borderStyle === 3 && (
-                                    <ColorInput label="Back Color (box)" value={template.backColor || "#000000"} onChange={(v) => set("backColor", v)} />
+                                {template.borderStyle === 3 ? (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <ColorInput label="Box Color" value={template.backColor || "#000000"} onChange={(v) => set("backColor", v)} />
+                                        <NumberInput label="Box Padding" value={template.outlineWidth} onChange={(v) => set("outlineWidth", v)} min={0} max={30} step={1} />
+                                    </div>
+                                ) : (
+                                    <NumberInput label="Outline Width" value={template.outlineWidth} onChange={(v) => set("outlineWidth", v)} min={0} max={10} step={0.1} />
                                 )}
                                 <div className="space-y-3">
                                     <Toggle label="Shadow" checked={template.shadow} onChange={(v) => set("shadow", v)} />

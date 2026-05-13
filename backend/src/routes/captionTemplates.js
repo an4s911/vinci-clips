@@ -80,7 +80,8 @@ router.post('/preview', async (req, res) => {
         }));
 
         const phrases = buildPhrases(words, resolved.maxWordsPerPhrase || 2, resolved.uppercase);
-        fs.writeFileSync(assPath, buildCaptionASSContent(phrases, resolved, dims));
+        const assContent = buildCaptionASSContent(phrases, resolved, dims);
+        fs.writeFileSync(assPath, assContent);
 
         const bgHex = bgColor.replace(/^#/, '');
         const bgFilter = `drawbox=x=0:y=0:w=iw:h=ih:color=0x${bgHex}@1.0:t=fill`;

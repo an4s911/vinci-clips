@@ -224,6 +224,13 @@ function buildHookASSContent(text, resolvedStyle, videoDimensions) {
     const hookScaleXASS = convertScaleToASSPercent(1);
     const hookScaleYASS = convertScaleToASSPercent(hookScaleY);
 
+    const hookBorderStyle = resolvedStyle.borderStyle ?? 1;
+    // libass uses OutlineColour as box fill for BorderStyle=3
+    const hookOutlineColour = hookBorderStyle === 3 && resolvedStyle.backColor
+        ? convertColorToASS(resolvedStyle.backColor)
+        : convertColorToASS(resolvedStyle.bordercolor);
+    const hookBackColour = '&H80000000';
+
     return `[Script Info]
 ScriptType: v4.00+
 PlayResX: ${playRes.width}
@@ -233,7 +240,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Hook,${resolvedStyle.fontName},${hookFontSize},${hookColor},&H000000FF,${convertColorToASS(resolvedStyle.bordercolor)},&H80000000,${resolvedStyle.bold ? -1 : 0},${resolvedStyle.italic ? 1 : 0},0,0,${hookScaleXASS},${hookScaleYASS},0,0,1,${resolvedStyle.borderw},${resolvedStyle.shadow ? (resolvedStyle.shadowDepth ?? 1) : 0},${hookAlignment},${sideMargin},${sideMargin},${topMargin},1
+Style: Hook,${resolvedStyle.fontName},${hookFontSize},${hookColor},&H000000FF,${hookOutlineColour},${hookBackColour},${resolvedStyle.bold ? -1 : 0},${resolvedStyle.italic ? 1 : 0},0,0,${hookScaleXASS},${hookScaleYASS},0,0,${hookBorderStyle},${resolvedStyle.borderw},${resolvedStyle.shadow ? (resolvedStyle.shadowDepth ?? 1) : 0},${hookAlignment},${sideMargin},${sideMargin},${topMargin},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -407,9 +414,12 @@ function buildCaptionASSContent(phrases, resolvedStyle, videoDimensions) {
     const scaleX = convertScaleToASSPercent(resolvedStyle.scaleX);
     const scaleY = convertScaleToASSPercent(resolvedStyle.scaleY);
     const alignment = resolvedStyle.alignment ?? 2;
-    const backColour = resolvedStyle.backColor
+    const isOpaqueBox = (resolvedStyle.borderStyle ?? 1) === 3;
+    // libass uses OutlineColour (not BackColour) as the box fill for BorderStyle=3
+    const outlineColour = isOpaqueBox && resolvedStyle.backColor
         ? convertColorToASS(resolvedStyle.backColor)
-        : '&H80000000';
+        : convertColorToASS(resolvedStyle.bordercolor);
+    const backColour = '&H80000000';
 
     const styleFields = [
         'Default',
@@ -417,7 +427,7 @@ function buildCaptionASSContent(phrases, resolvedStyle, videoDimensions) {
         resolvedStyle.fontSize,
         convertColorToASS(resolvedStyle.fontcolor),
         '&H000000FF',
-        convertColorToASS(resolvedStyle.bordercolor),
+        outlineColour,
         backColour,
         resolvedStyle.bold ? -1 : 0,
         resolvedStyle.italic ? 1 : 0,
@@ -511,7 +521,7 @@ async function renderCaptionedVideo({
 }) {
     const videoDimensions = videoDimensionsOverride || await probeVideoDimensions(inputPath);
     const resolvedStyle = await getResolvedStyle(styleId, videoDimensions);
-    const resolvedHookStyle = hookStyleId && hookStyleId !== styleId
+    const resolvedHookStyle = hookStyleId
         ? await getResolvedStyle(hookStyleId, videoDimensions)
         : resolvedStyle;
     const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
