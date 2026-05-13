@@ -730,7 +730,7 @@ export default function TranscriptDetailPage() {
                                         const duration = clip.totalDuration || (clip.end || 0) - (clip.start || 0);
 
                                         return (
-                                        <div key={index} onClick={() => toggleClipSelect(index)} className={`flex flex-col rounded-xl border-2 bg-muted overflow-hidden transition-colors cursor-pointer select-none ${isSelected ? 'border-primary' : 'border-transparent'}`}>
+                                        <div key={index} onClick={() => toggleClipSelect(index)} className={`flex flex-col rounded-xl border-2 bg-muted overflow-hidden transition-colors select-none ${isSelected ? 'border-primary' : 'border-transparent'}`}>
 
                                             {/* Video / placeholder */}
                                             <div className="relative bg-black" onClick={e => e.stopPropagation()}>
