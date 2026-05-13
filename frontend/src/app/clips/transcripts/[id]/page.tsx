@@ -127,6 +127,10 @@ export default function TranscriptDetailPage() {
     const router = useRouter();
     const id = params.id;
 
+    const seenBannerKey = (key: string) => `seen-banner:${id}:${key}`;
+    const hasBannerBeenSeen = (key: string) => localStorage.getItem(seenBannerKey(key)) === '1';
+    const markBannerSeen = (key: string) => localStorage.setItem(seenBannerKey(key), '1');
+
     const fetchTranscript = useCallback(async () => {
         const response = await axios.get(`${API_URL}/clips/transcripts/${id}`);
         setTranscript(response.data);
@@ -160,6 +164,16 @@ export default function TranscriptDetailPage() {
     );
 
     const hasActiveJobs = Boolean(isTranscriptProcessing(transcript) || transcript?.clips?.some(isClipGenerating));
+
+    useEffect(() => {
+        if (!transcript || !id) return;
+        if (transcript.analysisMetadata?.filteredClipCount && !hasBannerBeenSeen('filtered')) {
+            setTimeout(() => markBannerSeen('filtered'), 3000);
+        }
+        if (transcript.analysisMetadata?.analyzedAt && transcript.clips?.length && !hasBannerBeenSeen('analyzed')) {
+            setTimeout(() => markBannerSeen('analyzed'), 3000);
+        }
+    }, [transcript, id]);
 
     useEffect(() => {
         if (!id || !hasActiveJobs) return;
@@ -600,12 +614,12 @@ export default function TranscriptDetailPage() {
                             </div>
                         )}
                         {transcript && transcript.videoUrl && (
-                            <video 
-                                controls 
-                                src={`${API_URL}${transcript.videoUrl}`} 
-                                className="w-full rounded-lg shadow-lg"
-                            >
-                            </video>
+                            <video
+                                controls
+                                src={`${API_URL}${transcript.videoUrl}`}
+                                className="rounded-lg shadow-lg"
+                                style={{ maxHeight: '280px', maxWidth: '100%' }}
+                            />
                         )}
                         <details className="mt-4 rounded-lg border bg-muted/30">
                             <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
@@ -693,12 +707,12 @@ export default function TranscriptDetailPage() {
                                     {error}
                                 </div>
                             )}
-                            {transcript.analysisMetadata?.filteredClipCount ? (
+                            {transcript.analysisMetadata?.filteredClipCount && !hasBannerBeenSeen('filtered') ? (
                                 <div className="mb-4 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                                     {transcript.analysisMetadata.filteredClipCount} clip{transcript.analysisMetadata.filteredClipCount === 1 ? '' : 's'} hidden for language.
                                 </div>
                             ) : null}
-                            {transcript.analysisMetadata?.analyzedAt && transcript.clips?.length ? (
+                            {transcript.analysisMetadata?.analyzedAt && transcript.clips?.length && !hasBannerBeenSeen('analyzed') ? (
                                 <div className="mb-4 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-950">
                                     Clips analyzed automatically. All {transcript.clips.length} are queued for generation.
                                 </div>
@@ -706,276 +720,208 @@ export default function TranscriptDetailPage() {
                             {!canAnalyzeTranscript ? (
                                 <p className="mt-4 text-muted-foreground">Clip analysis is unavailable until transcript content exists.</p>
                             ) : transcript.clips && transcript.clips.length > 0 ? (
-                                <div className="mt-4 space-y-4">
-	                                    {getSortedClipIndexes().map((index) => {
-                                            const clip = transcript.clips[index];
-	                                        const primaryVideo = generatedClips[index] as ClipVideo | undefined;
-	                                        const previousVersions = getPreviousVersions(clip, primaryVideo);
-                                            const clipGenerating = isClipGenerating(clip);
-                                            const isSelected = selectedClipIndexes.has(index);
+                                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                                    {getSortedClipIndexes().map((index) => {
+                                        const clip = transcript.clips[index];
+                                        const primaryVideo = generatedClips[index] as ClipVideo | undefined;
+                                        const previousVersions = getPreviousVersions(clip, primaryVideo);
+                                        const clipGenerating = isClipGenerating(clip);
+                                        const isSelected = selectedClipIndexes.has(index);
+                                        const duration = clip.totalDuration || (clip.end || 0) - (clip.start || 0);
 
-	                                        return (
-	                                        <div key={index} className={`p-4 bg-muted rounded-lg transition-colors border-2 ${isSelected ? 'border-primary' : 'border-transparent'}`}>
-	                                            <div className="flex items-start justify-between mb-2">
-                                                    <div className="flex items-start gap-3 flex-1 min-w-0">
-                                                        <button
-                                                            onClick={() => toggleClipSelect(index)}
-                                                            className="mt-0.5 flex-shrink-0 text-muted-foreground hover:text-primary"
-                                                        >
-                                                            {isSelected ? <CheckSquare className="h-5 w-5 text-primary" /> : <Square className="h-5 w-5" />}
-                                                        </button>
-                                                        <div className="min-w-0">
-                                                            <div className="font-semibold truncate">{clip.title}</div>
-                                                            <div className="flex flex-wrap items-center gap-2 mt-1">
-                                                                {clip.viralityScore !== undefined && (
-                                                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getViralityBadgeClass(clip.viralityScore)}`}>
-                                                                        {clip.viralityScore >= 80 && <Flame className="h-3 w-3" />}
-                                                                        {clip.viralityScore}
-                                                                    </span>
-                                                                )}
-                                                                {clip.tags?.map(tag => (
-                                                                    <span key={tag} className="px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground text-xs">{tag}</span>
-                                                                ))}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                    <div className="ml-2 flex flex-wrap justify-end gap-2">
+                                        return (
+                                        <div key={index} onClick={() => toggleClipSelect(index)} className={`flex flex-col rounded-xl border-2 bg-muted overflow-hidden transition-colors cursor-pointer select-none ${isSelected ? 'border-primary' : 'border-transparent'}`}>
+
+                                            {/* Video / placeholder */}
+                                            <div className="relative bg-black" onClick={e => e.stopPropagation()}>
+                                                {primaryVideo ? (
+                                                    <video
+                                                        controls
+                                                        src={`${API_URL}${primaryVideo.url}`}
+                                                        className="w-full"
+                                                        style={{ maxHeight: '220px' }}
+                                                    />
+                                                ) : (
+                                                    <div className="flex items-center justify-center bg-slate-900 text-slate-500" style={{ height: '140px' }}>
                                                         {clipGenerating ? (
-                                                            <Button
-                                                                onClick={() => cancelClipGeneration(index)}
-                                                                disabled={cancellingClips[index] || clip.generation?.status === 'cancelling'}
-                                                                size="sm"
-                                                                variant="outline"
-                                                            >
-                                                                <StopCircle className="mr-2 h-4 w-4" />
-                                                                {cancellingClips[index] || clip.generation?.status === 'cancelling' ? 'Stopping...' : 'Stop'}
-                                                            </Button>
-                                                        ) : null}
-	                                                    <Button
-	                                                        onClick={() => generateVideoClip(index)}
-	                                                        disabled={generatingClips[index] || clipGenerating}
-	                                                        size="sm"
-	                                                    >
-	                                                        {generatingClips[index] || clipGenerating ? 'Generating...' : 'Generate Clip'}
-	                                                    </Button>
-                                                        {generatedClips[index] && (
-                                                            <Button
-                                                                size="sm"
-                                                                variant="outline"
+                                                            <div className="flex flex-col items-center gap-2 text-xs text-slate-400">
+                                                                <Loader2 className="h-6 w-6 animate-spin" />
+                                                                <span>{formatPhase(clip.generation?.phase)}</span>
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-xs">No video yet</span>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {/* Select checkbox overlay */}
+                                                <button
+                                                    onClick={e => { e.stopPropagation(); toggleClipSelect(index); }}
+                                                    className={`absolute top-2 left-2 rounded p-0.5 transition-colors ${isSelected ? 'bg-primary text-primary-foreground' : 'bg-black/60 text-white hover:bg-black/80'}`}
+                                                >
+                                                    {isSelected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                                                </button>
+                                                {/* Virality badge overlay */}
+                                                {clip.viralityScore !== undefined && (
+                                                    <span className={`absolute top-2 right-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold ${getViralityBadgeClass(clip.viralityScore)}`}>
+                                                        {clip.viralityScore >= 80 && <Flame className="h-3 w-3" />}
+                                                        {clip.viralityScore}
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            {/* Card body */}
+                                            <div className="flex flex-col flex-1 p-3 gap-2">
+
+                                                {/* Title + meta */}
+                                                <div>
+                                                    <div className="font-semibold text-sm leading-snug line-clamp-2">{clip.title}</div>
+                                                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                                        <span className="text-xs text-muted-foreground">{formatTime(duration)}</span>
+                                                        {clip.tags?.map(tag => (
+                                                            <span key={tag} className="px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground text-xs">{tag}</span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* Generation status (if relevant) */}
+                                                {clip.generation && clip.generation.status !== 'idle' && !primaryVideo && (
+                                                    <div className={`rounded border px-2 py-1.5 text-xs ${clip.generation.status === 'failed' ? 'border-red-200 bg-red-50 text-red-800' : clip.generation.status === 'cancelled' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-blue-200 bg-blue-50 text-blue-800'}`}>
+                                                        <Badge variant={clip.generation.status === 'failed' ? 'destructive' : 'secondary'} className="mr-1 text-xs">{clip.generation.status}</Badge>
+                                                        {clip.generation.progressMessage}
+                                                        {clip.generation.error ? <span className="block mt-0.5 text-xs opacity-75">{clip.generation.error}</span> : null}
+                                                    </div>
+                                                )}
+
+                                                {/* Primary actions */}
+                                                <div className="flex flex-wrap gap-1.5 mt-auto pt-1" onClick={e => e.stopPropagation()}>
+                                                    {clipGenerating ? (
+                                                        <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
+                                                            onClick={() => cancelClipGeneration(index)}
+                                                            disabled={cancellingClips[index] || clip.generation?.status === 'cancelling'}
+                                                        >
+                                                            <StopCircle className="mr-1 h-3 w-3" />
+                                                            {clip.generation?.status === 'cancelling' ? 'Stopping…' : 'Stop'}
+                                                        </Button>
+                                                    ) : (
+                                                        <Button size="sm" className="h-7 px-2 text-xs"
+                                                            onClick={() => generateVideoClip(index)}
+                                                            disabled={generatingClips[index]}
+                                                        >
+                                                            {generatingClips[index] ? 'Generating…' : primaryVideo ? 'Regenerate' : 'Generate'}
+                                                        </Button>
+                                                    )}
+                                                    {primaryVideo && (
+                                                        <>
+                                                            <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
                                                                 onClick={() => openCaptionModal([index])}
                                                             >
                                                                 Edit
                                                             </Button>
-                                                        )}
-                                                    </div>
-	                                            </div>
-                                                {clip.generation && clip.generation.status !== 'idle' ? (
-                                                    <div className={`mb-3 rounded-md border p-3 text-sm ${clip.generation.status === 'failed' ? 'border-red-200 bg-red-50 text-red-900' : clip.generation.status === 'cancelled' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-blue-200 bg-blue-50 text-blue-950'}`}>
-                                                        <div className="mb-1 flex items-center gap-2 font-medium">
-                                                            {clipGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                                                            <span>{formatPhase(clip.generation.phase, clip.segments?.length)}</span>
-                                                            <Badge variant={clip.generation.status === 'failed' ? 'destructive' : 'secondary'}>{clip.generation.status}</Badge>
-                                                        </div>
-                                                        <p>{clip.generation.progressMessage}</p>
-                                                        {clip.generation.error ? <p className="mt-1 text-xs">{clip.generation.error}</p> : null}
-                                                    </div>
-                                                ) : null}
-	                                            <div className="text-sm text-muted-foreground">
-                                                {clip.segments && clip.segments.length > 0 ? (
-                                                    // Multi-segment clip
-                                                    <div>
-                                                        <div className="font-medium text-xs text-primary mb-1">MIXED SEGMENTS:</div>
-                                                        {clip.segments.map((segment, segIndex) => (
-                                                            <div key={segIndex} className="ml-2">
-                                                                • {formatTime(segment.start)} - {formatTime(segment.end)}
-                                                            </div>
-                                                        ))}
-                                                        <div className="mt-1 text-xs font-medium">
-                                                            Total Duration: {clip.totalDuration ? formatTime(clip.totalDuration) : 'Unknown'}
-                                                        </div>
-                                                    </div>
-                                                ) : (
-                                                    // Single segment clip
-                                                    <div>
-                                                        <div>{formatTime(clip.start || 0)} - {formatTime(clip.end || 0)}</div>
-                                                        <div className="text-xs">
-                                                            Duration: {clip.totalDuration ? formatTime(clip.totalDuration) : formatTime((clip.end || 0) - (clip.start || 0))}
-                                                        </div>
-                                                    </div>
-                                                )}
-                                                <Button 
-                                                    onClick={() => seekToClip(clip)}
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    className="mt-2 h-6 px-2 text-xs"
-                                                >
-                                                    Preview in Player
-                                                </Button>
-                                            </div>
-
-                                            <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
-                                                <div className="mb-2 flex items-center justify-between gap-3">
-                                                    <label className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={Boolean(clip.hook?.enabled)}
-                                                            onChange={(event) => updateClipHookDraft(index, { enabled: event.target.checked })}
-                                                            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                                        />
-                                                        Hook
-                                                    </label>
-                                                    <div className="flex flex-wrap justify-end gap-2">
-                                                        <Button
-                                                            size="sm"
-                                                            variant="outline"
-                                                            onClick={() => regenerateClipHook(index)}
-                                                            disabled={regeneratingHooks[index]}
-                                                            className="h-7 px-2 text-xs"
-                                                        >
-                                                            {regeneratingHooks[index] ? (
-                                                                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                                                            ) : (
-                                                                <RefreshCcw className="mr-1 h-3 w-3" />
-                                                            )}
-                                                            {regeneratingHooks[index] ? 'Regenerating...' : 'Regenerate Hook'}
-                                                        </Button>
-                                                        <Button
-                                                            size="sm"
-                                                            variant="outline"
-                                                            onClick={() => saveClipHook(index)}
-                                                            disabled={savingHooks[index]}
-                                                            className="h-7 px-2 text-xs"
-                                                        >
-                                                            <Save className="mr-1 h-3 w-3" />
-                                                            {savingHooks[index] ? 'Saving...' : 'Save'}
-                                                        </Button>
-                                                    </div>
-                                                </div>
-                                                <textarea
-                                                    value={clip.hook?.text || ''}
-                                                    onChange={(event) => updateClipHookDraft(index, { text: event.target.value })}
-                                                    rows={2}
-                                                    maxLength={120}
-                                                    placeholder="Short top overlay hook"
-                                                    className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm text-slate-900 shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                />
-                                                {clip.hook?.enabled && !clip.hook.text.trim() && (
-                                                    <p className="mt-1 text-xs text-amber-700">Hook is enabled but will be skipped until text is added.</p>
-                                                )}
-                                            </div>
-
-                                            {/* Generated clip video player */}
-                                            {generatedClips[index] && (
-                                                <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-                                                    <div className="flex items-center justify-between mb-2">
-                                                        <div>
-                                                            <h4 className="text-sm font-semibold text-green-800">Primary Video</h4>
-                                                            <p className="text-xs text-green-700">
-                                                                {primaryVideo?.type === 'reframed' ? 'Reframed' : 'Generated'}
-                                                                {primaryVideo?.platformName ? ` for ${primaryVideo.platformName}` : ''}
-                                                                {primaryVideo?.createdAt ? ` · ${formatVersionDate(primaryVideo.createdAt)}` : ''}
-                                                            </p>
-                                                        </div>
-                                                        <div className="flex items-center gap-2">
-                                                            <Button 
-                                                                size="sm" 
-                                                                variant="outline"
-                                                                onClick={() => primaryVideo && openReframeModal(primaryVideo, index)}
-                                                                className="flex items-center gap-1"
+                                                            <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
+                                                                onClick={() => openReframeModal(primaryVideo, index)}
                                                             >
-                                                                <Wand2 className="w-3 h-3" />
-                                                                Reframe
+                                                                <Wand2 className="h-3 w-3" />
                                                             </Button>
-                                                            <Button asChild size="sm" variant="outline">
-                                                                <a href={`${API_URL}${generatedClips[index].url}`} download target="_blank" rel="noopener noreferrer">
-                                                                    <Download className="w-3 h-3 mr-1" />
-                                                                    Download
+                                                            <Button asChild size="sm" variant="outline" className="h-7 px-2 text-xs">
+                                                                <a href={`${API_URL}${primaryVideo.url}`} download>
+                                                                    <Download className="h-3 w-3" />
                                                                 </a>
                                                             </Button>
-                                                            {primaryVideo && (
-                                                                <Button
-                                                                    size="sm"
-                                                                    variant="destructive"
-                                                                    onClick={() => deleteClipVersion(index, primaryVideo)}
-                                                                    disabled={deletingVersions[`${index}:${primaryVideo.id}`]}
-                                                                    className="flex items-center gap-1"
-                                                                >
-                                                                    <Trash2 className="w-3 h-3" />
-                                                                    Delete
-                                                                </Button>
-                                                            )}
+                                                            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                                                                onClick={() => deleteClipVersion(index, primaryVideo)}
+                                                                disabled={deletingVersions[`${index}:${primaryVideo.id}`]}
+                                                            >
+                                                                <Trash2 className="h-3 w-3" />
+                                                            </Button>
+                                                        </>
+                                                    )}
+                                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs"
+                                                        onClick={() => seekToClip(clip)}
+                                                    >
+                                                        Preview
+                                                    </Button>
+                                                </div>
+
+                                                {/* Hook — collapsible */}
+                                                <details className="rounded-md border border-slate-200 bg-white text-sm" onClick={e => e.stopPropagation()}>
+                                                    <summary className="cursor-pointer px-3 py-2 font-medium text-slate-800 select-none flex items-center justify-between">
+                                                        <span className="flex items-center gap-2">
+                                                            Hook
+                                                            {clip.hook?.enabled && <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />}
+                                                        </span>
+                                                    </summary>
+                                                    <div className="px-3 pb-3 space-y-2">
+                                                        <label className="flex items-center gap-2 text-xs text-slate-700">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={Boolean(clip.hook?.enabled)}
+                                                                onChange={e => updateClipHookDraft(index, { enabled: e.target.checked })}
+                                                                className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600"
+                                                            />
+                                                            Enabled
+                                                        </label>
+                                                        <textarea
+                                                            value={clip.hook?.text || ''}
+                                                            onChange={e => updateClipHookDraft(index, { text: e.target.value })}
+                                                            rows={2}
+                                                            maxLength={120}
+                                                            placeholder="Short top overlay hook"
+                                                            className="w-full resize-none rounded border border-input bg-background px-2 py-1.5 text-xs text-slate-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                        />
+                                                        <div className="flex gap-1.5">
+                                                            <Button size="sm" variant="outline" className="h-6 px-2 text-xs"
+                                                                onClick={() => regenerateClipHook(index)}
+                                                                disabled={regeneratingHooks[index]}
+                                                            >
+                                                                {regeneratingHooks[index] ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCcw className="h-3 w-3" />}
+                                                            </Button>
+                                                            <Button size="sm" variant="outline" className="h-6 px-2 text-xs"
+                                                                onClick={() => saveClipHook(index)}
+                                                                disabled={savingHooks[index]}
+                                                            >
+                                                                <Save className="h-3 w-3 mr-1" />
+                                                                {savingHooks[index] ? 'Saving…' : 'Save'}
+                                                            </Button>
                                                         </div>
                                                     </div>
-                                                    <video 
-                                                        controls 
-                                                        src={`${API_URL}${generatedClips[index].url}`} 
-                                                        className="w-full rounded"
-                                                        style={{maxHeight: '300px'}}
-                                                    />
-                                                    {previousVersions.length > 0 && (
-                                                        <details className="mt-3 rounded-md border border-green-200 bg-white">
-                                                            <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-green-900">
-                                                                Previous versions ({previousVersions.length})
-                                                            </summary>
-                                                            <div className="divide-y divide-green-100">
-                                                                {previousVersions.map((version) => (
-                                                                    <div key={version.id} className="grid gap-3 p-3 md:grid-cols-[minmax(0,1fr)_180px]">
-                                                                        <div className="space-y-1 text-sm">
-                                                                            <div className="font-medium capitalize text-slate-900">
-                                                                                {version.type}
-                                                                                {version.platformName ? ` · ${version.platformName}` : ''}
-                                                                            </div>
-                                                                            <div className="text-xs text-slate-600">{formatVersionDate(version.createdAt)}</div>
-                                                                            {version.aspectRatio && (
-                                                                                <div className="text-xs text-slate-600">Aspect ratio: {version.aspectRatio}</div>
-                                                                            )}
-                                                                            <div className="flex flex-wrap gap-2 pt-1">
-                                                                                <Button
-                                                                                    size="sm"
-                                                                                    variant="outline"
-                                                                                    className="h-7 px-2 text-xs"
-                                                                                    onClick={() => openReframeModal(version, index)}
-                                                                                >
-                                                                                    <Wand2 className="mr-1 h-3 w-3" />
-                                                                                    Reframe
-                                                                                </Button>
-                                                                                <Button asChild size="sm" variant="outline" className="h-7 px-2 text-xs">
-                                                                                    <a href={`${API_URL}${version.url}`} target="_blank" rel="noopener noreferrer">
-                                                                                        <ExternalLink className="mr-1 h-3 w-3" />
-                                                                                        Preview
-                                                                                    </a>
-                                                                                </Button>
-                                                                                <Button asChild size="sm" variant="outline" className="h-7 px-2 text-xs">
-                                                                                    <a href={`${API_URL}${version.url}`} download={version.filename}>
-                                                                                        <Download className="mr-1 h-3 w-3" />
-                                                                                        Download
-                                                                                    </a>
-                                                                                </Button>
-                                                                                <Button
-                                                                                    size="sm"
-                                                                                    variant="destructive"
-                                                                                    className="h-7 px-2 text-xs"
-                                                                                    onClick={() => deleteClipVersion(index, version)}
-                                                                                    disabled={deletingVersions[`${index}:${version.id}`]}
-                                                                                >
-                                                                                    <Trash2 className="mr-1 h-3 w-3" />
-                                                                                    Delete
-                                                                                </Button>
-                                                                            </div>
-                                                                        </div>
-                                                                        <video
-                                                                            controls
-                                                                            src={`${API_URL}${version.url}`}
-                                                                            className="w-full rounded border bg-black"
-                                                                            style={{maxHeight: '120px'}}
-                                                                        />
+                                                </details>
+
+                                                {/* Previous versions — collapsible */}
+                                                {previousVersions.length > 0 && (
+                                                    <details className="rounded-md border border-slate-200 bg-white text-sm" onClick={e => e.stopPropagation()}>
+                                                        <summary className="cursor-pointer px-3 py-2 font-medium text-slate-800 select-none">
+                                                            Versions ({previousVersions.length})
+                                                        </summary>
+                                                        <div className="divide-y divide-slate-100">
+                                                            {previousVersions.map(version => (
+                                                                <div key={version.id} className="p-3 space-y-1.5">
+                                                                    <div className="flex items-center justify-between text-xs">
+                                                                        <span className="font-medium capitalize text-slate-800">
+                                                                            {version.type}{version.platformName ? ` · ${version.platformName}` : ''}
+                                                                        </span>
+                                                                        <span className="text-slate-500">{formatVersionDate(version.createdAt)}</span>
                                                                     </div>
-                                                                ))}
-                                                            </div>
-                                                        </details>
-                                                    )}
-                                                </div>
-                                            )}
+                                                                    <video controls src={`${API_URL}${version.url}`} className="w-full rounded border bg-black" style={{ maxHeight: '100px' }} />
+                                                                    <div className="flex flex-wrap gap-1">
+                                                                        <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => openReframeModal(version, index)}>
+                                                                            <Wand2 className="mr-1 h-3 w-3" />Reframe
+                                                                        </Button>
+                                                                        <Button asChild size="sm" variant="outline" className="h-6 px-2 text-xs">
+                                                                            <a href={`${API_URL}${version.url}`} download={version.filename}><Download className="mr-1 h-3 w-3" />Download</a>
+                                                                        </Button>
+                                                                        <Button size="sm" variant="destructive" className="h-6 px-2 text-xs"
+                                                                            onClick={() => deleteClipVersion(index, version)}
+                                                                            disabled={deletingVersions[`${index}:${version.id}`]}
+                                                                        >
+                                                                            <Trash2 className="h-3 w-3" />
+                                                                        </Button>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </details>
+                                                )}
+                                            </div>
                                         </div>
                                         );
                                     })}
