@@ -82,13 +82,13 @@ function StyleGrid({ styles, value, onChange, disabled }: {
     }
 
     return (
-        <div className="grid grid-cols-3 gap-2 max-h-52 overflow-y-auto pr-1">
+        <div className="flex gap-2 overflow-x-auto pb-2 pr-1">
             {styles.map(s => (
                 <button
                     key={s.id}
                     onClick={() => onChange(s.id)}
                     disabled={disabled}
-                    className={`flex flex-col items-center gap-1 rounded-lg border-2 p-1 transition-colors ${
+                    className={`flex w-28 flex-none flex-col items-center gap-1 rounded-lg border-2 p-1 transition-colors ${
                         value === s.id ? 'border-primary bg-primary/5' : 'border-transparent hover:border-muted-foreground/30'
                     }`}
                 >
