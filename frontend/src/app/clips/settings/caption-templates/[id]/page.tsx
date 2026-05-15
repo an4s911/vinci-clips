@@ -1,8 +1,7 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
 import axios from "axios";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,7 +9,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
-    ChevronLeft, Save, Loader2, Play, Smartphone, Square, Monitor
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import {
+    Check, ChevronLeft, Save, Loader2, Play, Smartphone, Square, Monitor
 } from "lucide-react";
 import {
     CaptionTemplatePreview,
@@ -113,6 +120,38 @@ function getErrorMessage(error: unknown, fallback: string) {
         : fallback;
 }
 
+function getTemplateSnapshot(template: CaptionTemplate) {
+    return JSON.stringify({
+        name: template.name ?? "",
+        description: template.description ?? "",
+        usage: template.usage ?? "both",
+        fontName: template.fontName ?? "DejaVu Sans",
+        fontColor: template.fontColor ?? "#ffffff",
+        outlineColor: template.outlineColor ?? "#000000",
+        backColor: template.backColor ?? "",
+        outlineWidth: template.outlineWidth ?? 1,
+        shadow: template.shadow ?? false,
+        shadowDepth: template.shadowDepth ?? 1,
+        bold: template.bold ?? true,
+        italic: template.italic ?? false,
+        underline: template.underline ?? false,
+        alignment: template.alignment ?? 2,
+        scaleX: template.scaleX ?? 1,
+        scaleY: template.scaleY ?? 1,
+        spacing: template.spacing ?? 0,
+        uppercase: template.uppercase ?? true,
+        borderStyle: template.borderStyle ?? 1,
+        preview: {
+            backgroundColor: template.preview?.backgroundColor ?? "#111111",
+        },
+        layouts: {
+            portrait: { ...template.layouts.portrait },
+            square: { ...template.layouts.square },
+            landscape: { ...template.layouts.landscape },
+        },
+    });
+}
+
 function NumberInput({ label, value, onChange, min, max, step = 1 }: {
     label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number;
 }) {
@@ -171,15 +210,91 @@ export default function CaptionTemplateEditorPage() {
     const [renderingPreview, setRenderingPreview] = useState(false);
     const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null);
     const [activeSection, setActiveSection] = useState<string>("typography");
+    const [savedSnapshot, setSavedSnapshot] = useState(() => getTemplateSnapshot({
+        ...DEFAULT_TEMPLATE,
+        id: "new",
+        isSeeded: false,
+    }));
+    const [saveSucceeded, setSaveSucceeded] = useState(false);
+    const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
     const videoRef = useRef<HTMLVideoElement>(null);
+    const allowNavigationRef = useRef(false);
+    const guardEntryActiveRef = useRef(false);
+    const pendingNavigationRef = useRef<{ type: "path"; href: string } | { type: "back" } | null>(null);
+
+    const currentSnapshot = useMemo(() => getTemplateSnapshot(template), [template]);
+    const isDirty = currentSnapshot !== savedSnapshot;
 
     useEffect(() => {
         if (isNew) return;
         axios.get(`${API_URL}/clips/caption-templates/${params.id}`)
-            .then((res) => setTemplate({ ...res.data.template, usage: res.data.template.usage || "both" }))
+            .then((res) => {
+                const loadedTemplate = { ...res.data.template, usage: res.data.template.usage || "both" };
+                setTemplate(loadedTemplate);
+                setSavedSnapshot(getTemplateSnapshot(loadedTemplate));
+            })
             .catch((e: unknown) => setError(getErrorMessage(e, "Failed to load template")))
             .finally(() => setLoading(false));
     }, [params.id, isNew]);
+
+    useEffect(() => {
+        if (isDirty) setSaveSucceeded(false);
+    }, [isDirty]);
+
+    useEffect(() => {
+        if (!saveSucceeded) return;
+        const timeout = window.setTimeout(() => setSaveSucceeded(false), 1500);
+        return () => window.clearTimeout(timeout);
+    }, [saveSucceeded]);
+
+    useEffect(() => {
+        if (!isDirty) return;
+
+        const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+            event.preventDefault();
+            event.returnValue = "";
+        };
+
+        window.addEventListener("beforeunload", handleBeforeUnload);
+        return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+    }, [isDirty]);
+
+    useEffect(() => {
+        if (!isDirty) return;
+
+        const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        if (!guardEntryActiveRef.current) {
+            window.history.pushState({ captionTemplateGuard: true }, "", currentUrl);
+            guardEntryActiveRef.current = true;
+        }
+
+        const handlePopState = () => {
+            if (allowNavigationRef.current) return;
+            window.history.pushState({ captionTemplateGuard: true }, "", currentUrl);
+            guardEntryActiveRef.current = true;
+            pendingNavigationRef.current = { type: "back" };
+            setDiscardDialogOpen(true);
+        };
+
+        window.addEventListener("popstate", handlePopState);
+        return () => window.removeEventListener("popstate", handlePopState);
+    }, [isDirty]);
+
+    useEffect(() => {
+        if (isDirty || !guardEntryActiveRef.current || allowNavigationRef.current) return;
+
+        const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        const handleGuardPop = () => {
+            window.history.replaceState(null, "", currentUrl);
+            guardEntryActiveRef.current = false;
+            allowNavigationRef.current = false;
+        };
+
+        allowNavigationRef.current = true;
+        window.addEventListener("popstate", handleGuardPop, { once: true });
+        window.history.back();
+        return () => window.removeEventListener("popstate", handleGuardPop);
+    }, [isDirty]);
 
     const set = <K extends keyof CaptionTemplate>(key: K, value: CaptionTemplate[K]) =>
         setTemplate((prev) => ({ ...prev, [key]: value }));
@@ -202,15 +317,45 @@ export default function CaptionTemplateEditorPage() {
         try {
             if (isNew) {
                 const res = await axios.post(`${API_URL}/clips/caption-templates`, template);
+                const savedTemplate = { ...res.data.template, usage: res.data.template.usage || "both" };
+                setTemplate(savedTemplate);
+                setSavedSnapshot(getTemplateSnapshot(savedTemplate));
+                setSaveSucceeded(true);
+                allowNavigationRef.current = true;
                 router.push(`/clips/settings/caption-templates/${res.data.template.id}`);
             } else {
                 const res = await axios.put(`${API_URL}/clips/caption-templates/${template.id}`, template);
-                setTemplate(res.data.template);
+                const savedTemplate = { ...res.data.template, usage: res.data.template.usage || "both" };
+                setTemplate(savedTemplate);
+                setSavedSnapshot(getTemplateSnapshot(savedTemplate));
+                setSaveSucceeded(true);
             }
         } catch (e: unknown) {
             setError(getErrorMessage(e, "Failed to save"));
         } finally {
             setSaving(false);
+        }
+    };
+
+    const requestNavigation = useCallback((href: string) => {
+        if (!isDirty) {
+            router.push(href);
+            return;
+        }
+        pendingNavigationRef.current = { type: "path", href };
+        setDiscardDialogOpen(true);
+    }, [isDirty, router]);
+
+    const discardChangesAndNavigate = () => {
+        const pendingNavigation = pendingNavigationRef.current;
+        allowNavigationRef.current = true;
+        setDiscardDialogOpen(false);
+        if (pendingNavigation?.type === "path") {
+            guardEntryActiveRef.current = false;
+            router.push(pendingNavigation.href);
+        } else if (pendingNavigation?.type === "back") {
+            guardEntryActiveRef.current = false;
+            window.history.go(-2);
         }
     };
 
@@ -244,17 +389,20 @@ export default function CaptionTemplateEditorPage() {
     if (loading) return <div className="flex h-screen items-center justify-center"><Loader2 className="animate-spin" /></div>;
 
     const sections = ["typography", "colors", "position", "layouts"] as const;
+    const saveButtonDisabled = !isDirty || saving;
 
     return (
         <main className="container mx-auto max-w-6xl p-6 space-y-6">
             {/* Header */}
             <div className="flex items-center gap-4">
-                <Link href="/clips/settings/caption-templates">
-                    <Button variant="ghost" size="sm">
-                        <ChevronLeft className="h-4 w-4 mr-1" />
-                        Templates
-                    </Button>
-                </Link>
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => requestNavigation("/clips/settings/caption-templates")}
+                >
+                    <ChevronLeft className="h-4 w-4 mr-1" />
+                    Templates
+                </Button>
                 <div className="flex-1">
                     <Input
                         value={template.name}
@@ -264,9 +412,23 @@ export default function CaptionTemplateEditorPage() {
                     />
                 </div>
                 {template.isSeeded && <Badge variant="secondary">Default</Badge>}
-                <Button onClick={save} disabled={saving}>
-                    {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
-                    Save
+                <Button onClick={save} disabled={saveButtonDisabled}>
+                    {saving ? (
+                        <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Saving...
+                        </>
+                    ) : saveSucceeded ? (
+                        <>
+                            <Check className="h-4 w-4 mr-2" />
+                            Saved
+                        </>
+                    ) : (
+                        <>
+                            <Save className="h-4 w-4 mr-2" />
+                            Save
+                        </>
+                    )}
                 </Button>
             </div>
 
@@ -502,6 +664,25 @@ export default function CaptionTemplateEditorPage() {
                     </Card>
                 </div>
             </div>
+
+            <Dialog open={discardDialogOpen} onOpenChange={setDiscardDialogOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Discard unsaved changes?</DialogTitle>
+                        <DialogDescription>
+                            You have unsaved changes to this caption template. If you leave now, those changes will be lost.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setDiscardDialogOpen(false)}>
+                            Stay
+                        </Button>
+                        <Button variant="destructive" onClick={discardChangesAndNavigate}>
+                            Discard changes
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </main>
     );
 }
