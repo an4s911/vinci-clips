@@ -9,6 +9,7 @@ const {
     buildPhrases,
     buildCaptionASSContent,
     buildASSSubtitleFilter,
+    normalizeTemplateUsage,
 } = require('../utils/captioning');
 
 const router = express.Router();
@@ -132,11 +133,11 @@ router.post('/', async (req, res) => {
             name, description, fontName, fontColor, outlineColor, backColor,
             outlineWidth, shadow, shadowDepth, bold, italic, underline,
             alignment, scaleX, scaleY, spacing, uppercase, borderStyle,
-            layouts, hookOverrides, preview,
+            layouts, preview, usage,
         } = req.body;
 
-        if (!name || !layouts || !hookOverrides) {
-            return res.status(400).json({ success: false, error: 'name, layouts, hookOverrides required' });
+        if (!name || !layouts) {
+            return res.status(400).json({ success: false, error: 'name and layouts required' });
         }
 
         const data = {
@@ -160,7 +161,15 @@ router.post('/', async (req, res) => {
 
         const id = `ct_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
         const template = await prisma.captionTemplate.create({
-            data: { id, name, description, ...data, layouts, preview: computePreview(data, preview), hookOverrides },
+            data: {
+                id,
+                name,
+                description,
+                usage: normalizeTemplateUsage(usage),
+                ...data,
+                layouts,
+                preview: computePreview(data, preview),
+            },
         });
         res.json({ success: true, template });
     } catch (error) {
@@ -182,6 +191,8 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
     try {
         const { id, isSeeded, createdAt, updatedAt, preview, ...data } = req.body;
+        delete data.hookOverrides;
+        data.usage = normalizeTemplateUsage(data.usage);
         const template = await prisma.captionTemplate.update({
             where: { id: req.params.id },
             data: { ...data, preview: computePreview(data, preview) },

@@ -14,18 +14,13 @@ interface CaptionStyle extends CaptionPreviewTemplate {
     id: string;
     name: string;
     description?: string;
-    hookOverrides?: {
-        color?: string;
-        position?: 'top' | 'center' | 'bottom';
-        fontSizeMultiplier?: number;
-        marginV?: number;
-    };
+    usage?: 'captions' | 'hooks' | 'both';
 }
 
 interface ClipVideo {
     id: string;
     url: string;
-    clipTimeline?: any[] | null;
+    clipTimeline?: unknown[] | null;
 }
 
 interface Clip {
@@ -54,21 +49,6 @@ const PLATFORMS = [
     { id: 'youtube',   name: 'YouTube Wide',     aspectRatio: '16:9', icon: <Monitor     className="h-5 w-5" />, previewAspect: 'landscape' as CaptionPreviewAspect },
 ];
 
-const POSITION_TO_ALIGNMENT: Record<string, number> = { top: 8, center: 5, bottom: 2 };
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function hookPreviewTemplate(style: CaptionStyle): CaptionPreviewTemplate {
-    const ov = style.hookOverrides || {};
-    const alignment = POSITION_TO_ALIGNMENT[ov.position ?? 'top'] ?? 8;
-    const color = ov.color || style.fontColor;
-    const marginV = ov.marginV ?? style.layouts?.portrait?.marginV ?? 50;
-    const layouts = Object.fromEntries(
-        Object.entries(style.layouts || {}).map(([k, v]) => [k, { ...v, marginV }])
-    ) as CaptionPreviewTemplate['layouts'];
-    return { ...style, alignment, fontColor: color, layouts };
-}
-
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function SectionHeader({ title, enabled, onToggle }: { title: string; enabled: boolean; onToggle: () => void }) {
@@ -93,6 +73,14 @@ function StyleGrid({ styles, value, onChange, disabled }: {
     onChange: (id: string) => void;
     disabled: boolean;
 }) {
+    if (styles.length === 0) {
+        return (
+            <div className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
+                No eligible templates.
+            </div>
+        );
+    }
+
     return (
         <div className="grid grid-cols-3 gap-2 max-h-52 overflow-y-auto pr-1">
             {styles.map(s => (
@@ -126,8 +114,6 @@ function CombinedPreview({
     hookStyle: CaptionStyle | null;
     aspect: CaptionPreviewAspect;
 }) {
-    const hookTemplate = hookStyle ? hookPreviewTemplate(hookStyle) : null;
-
     return (
         <div className="flex flex-col items-center gap-2 w-full">
             <p className="text-xs text-muted-foreground font-medium">Preview</p>
@@ -149,10 +135,10 @@ function CombinedPreview({
                         <span className="text-slate-500 text-xs">no caption</span>
                     </div>
                 )}
-                {hookTemplate && (
+                {hookStyle && (
                     <div className="absolute inset-0 pointer-events-none overflow-hidden">
                         <CaptionTemplatePreview
-                            template={hookTemplate}
+                            template={hookStyle}
                             aspect={aspect}
                             text="HOOK TEXT HERE"
                             style={{ height: '100%', width: '100%', background: 'transparent' }}
@@ -175,7 +161,8 @@ export default function BulkEditModal({
     clips,
     onComplete,
 }: BulkEditModalProps) {
-    const [styles, setStyles] = useState<CaptionStyle[]>([]);
+    const [captionStyles, setCaptionStyles] = useState<CaptionStyle[]>([]);
+    const [hookStyles, setHookStyles] = useState<CaptionStyle[]>([]);
     const [fetching, setFetching] = useState(false);
 
     const [reframeEnabled, setReframeEnabled] = useState(true);
@@ -196,24 +183,25 @@ export default function BulkEditModal({
         setFetching(true);
         axios.get(`${API_URL}/clips/captions/styles`)
             .then(res => {
-                const list: CaptionStyle[] = res.data.styles || [];
-                setStyles(list);
-                if (list.length > 0) {
-                    if (!captionStyleId) setCaptionStyleId(list[0].id);
-                    if (!hookStyleId) setHookStyleId(list[0].id);
-                }
+                const captionList: CaptionStyle[] = res.data.captionStyles || [];
+                const hookList: CaptionStyle[] = res.data.hookStyles || [];
+                setCaptionStyles(captionList);
+                setHookStyles(hookList);
+                setCaptionStyleId(prev => captionList.some(style => style.id === prev) ? prev : captionList[0]?.id || '');
+                setHookStyleId(prev => hookList.some(style => style.id === prev) ? prev : hookList[0]?.id || '');
             })
             .catch(() => setError('Failed to load styles'))
             .finally(() => setFetching(false));
     }, [isOpen]);
 
     const isBulk = clipIndexes.length > 1;
-    const selectedCaption = styles.find(s => s.id === captionStyleId) || null;
-    const selectedHook = styles.find(s => s.id === hookStyleId) || null;
+    const selectedCaption = captionStyles.find(s => s.id === captionStyleId) || null;
+    const selectedHook = hookStyles.find(s => s.id === hookStyleId) || null;
     const selectedPlatform = PLATFORMS.find(p => p.id === platform)!;
     const previewAspect: CaptionPreviewAspect = reframeEnabled
         ? (selectedPlatform?.previewAspect ?? 'portrait')
         : 'portrait';
+    const missingRequiredTemplate = (captionsEnabled && !captionStyleId) || (hookEnabled && !hookStyleId);
     const nothingEnabled = !reframeEnabled && !captionsEnabled;
 
     const handleApply = async () => {
@@ -260,8 +248,11 @@ export default function BulkEditModal({
                     });
                 }
                 done++;
-            } catch (err: any) {
-                errors.push(`Clip ${idx + 1}: ${err.response?.data?.error || err.message}`);
+            } catch (err: unknown) {
+                const message = axios.isAxiosError<{ error?: string }>(err)
+                    ? err.response?.data?.error || err.message
+                    : err instanceof Error ? err.message : 'Unknown error';
+                errors.push(`Clip ${idx + 1}: ${message}`);
             }
         }
 
@@ -333,7 +324,7 @@ export default function BulkEditModal({
                                 <SectionHeader title="Caption Style" enabled={captionsEnabled} onToggle={() => setCaptionsEnabled(v => !v)} />
                                 {captionsEnabled && (
                                     <div className="pl-1 space-y-2">
-                                        <StyleGrid styles={styles} value={captionStyleId} onChange={setCaptionStyleId} disabled={applying} />
+                                        <StyleGrid styles={captionStyles} value={captionStyleId} onChange={setCaptionStyleId} disabled={applying} />
                                         {selectedCaption?.description && (
                                             <p className="text-xs text-muted-foreground">{selectedCaption.description}</p>
                                         )}
@@ -346,8 +337,8 @@ export default function BulkEditModal({
                                 <SectionHeader title="Hook Style" enabled={hookEnabled} onToggle={() => setHookEnabled(v => !v)} />
                                 {hookEnabled && (
                                     <div className="pl-1 space-y-2">
-                                        <p className="text-xs text-muted-foreground">Uses each clip's saved hook text. Edit per-clip before applying.</p>
-                                        <StyleGrid styles={styles} value={hookStyleId} onChange={setHookStyleId} disabled={applying} />
+                                        <p className="text-xs text-muted-foreground">Uses each clip&apos;s saved hook text. Edit per-clip before applying.</p>
+                                        <StyleGrid styles={hookStyles} value={hookStyleId} onChange={setHookStyleId} disabled={applying} />
                                         {selectedHook?.description && (
                                             <p className="text-xs text-muted-foreground">{selectedHook.description}</p>
                                         )}
@@ -393,7 +384,7 @@ export default function BulkEditModal({
                     )}
                     <div className="flex justify-end gap-3">
                         <Button variant="outline" onClick={onClose} disabled={applying}>Cancel</Button>
-                        <Button onClick={handleApply} disabled={applying || nothingEnabled || fetching}>
+                        <Button onClick={handleApply} disabled={applying || nothingEnabled || missingRequiredTemplate || fetching}>
                             {applying
                                 ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Applying…</>
                                 : `Apply to ${clipIndexes.length} clip${clipIndexes.length > 1 ? 's' : ''}`}

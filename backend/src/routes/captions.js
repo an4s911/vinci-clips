@@ -4,6 +4,8 @@ const fs = require('fs');
 const Transcript = require('../models/Transcript');
 const {
     getCaptionStylesForClient,
+    templateAllowsCaptions,
+    templateAllowsHooks,
     moveFileSafe,
     renderCaptionedVideo,
     buildWordsForClip,
@@ -20,10 +22,29 @@ const {
 
 const router = express.Router();
 
+async function validateTemplateUsage(styleId, useCase) {
+    if (!styleId) return;
+    const styles = await getCaptionStylesForClient();
+    const template = styles.find((style) => style.id === styleId);
+    if (!template) return;
+    const valid = useCase === 'hooks' ? templateAllowsHooks(template) : templateAllowsCaptions(template);
+    if (!valid) {
+        const label = useCase === 'hooks' ? 'hooks' : 'captions';
+        const error = new Error(`Template "${template.name}" cannot be used for ${label}.`);
+        error.statusCode = 400;
+        throw error;
+    }
+}
+
 router.get('/styles', async (req, res) => {
     try {
         const styles = await getCaptionStylesForClient();
-        res.json({ success: true, styles, captionStyles: styles, hookStyles: styles });
+        res.json({
+            success: true,
+            styles,
+            captionStyles: styles.filter(templateAllowsCaptions),
+            hookStyles: styles.filter(templateAllowsHooks),
+        });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -51,6 +72,7 @@ router.post('/generate/:id', async (req, res) => {
 
         const tempDir = path.join(__dirname, '../../temp');
         fs.mkdirSync(tempDir, { recursive: true });
+        await validateTemplateUsage(style, 'captions');
 
         const outputFileName = `${transcript._id}_captioned_${style}_${Date.now()}.mp4`;
         const outputPath = path.join(tempDir, outputFileName);
@@ -85,10 +107,10 @@ router.post('/generate/:id', async (req, res) => {
         });
     } catch (error) {
         console.error('Caption generation error:', error);
-        res.status(500).json({
+        res.status(error.statusCode || 500).json({
             success: false,
-            error: 'Failed to generate captioned video',
-            details: error.message
+            error: error.statusCode ? error.message : 'Failed to generate captioned video',
+            details: error.statusCode ? undefined : error.message
         });
     }
 });
@@ -126,6 +148,10 @@ router.post('/render-clip', async (req, res) => {
 
         const effectiveHookText = typeof hookText === 'string' ? hookText.trim() : (clip.hook?.text || '');
         const hookEnabled = Boolean(clip.hook?.enabled && effectiveHookText);
+        await validateTemplateUsage(captionStyleId, 'captions');
+        if (hookEnabled && hookStyleId) {
+            await validateTemplateUsage(hookStyleId, 'hooks');
+        }
 
         const words = normalizeTranscriptWords(transcript.transcript);
         const clipWords = buildWordsForClip(words, clip, primaryVideo.clipTimeline);
@@ -168,7 +194,11 @@ router.post('/render-clip', async (req, res) => {
         });
     } catch (error) {
         console.error('Clip caption render error:', error);
-        res.status(500).json({ success: false, error: 'Failed to render captioned clip', details: error.message });
+        res.status(error.statusCode || 500).json({
+            success: false,
+            error: error.statusCode ? error.message : 'Failed to render captioned clip',
+            details: error.statusCode ? undefined : error.message,
+        });
     }
 });
 
@@ -188,6 +218,10 @@ router.post('/render-batch', async (req, res) => {
         const normalizedClips = normalizeTranscriptClips(transcript);
         const results = [];
         const errors = [];
+        await validateTemplateUsage(captionStyleId, 'captions');
+        if (hookStyleId) {
+            await validateTemplateUsage(hookStyleId, 'hooks');
+        }
 
         for (const rawIndex of clipIndexes) {
             const clipIndex = Number(rawIndex);
@@ -265,7 +299,11 @@ router.post('/render-batch', async (req, res) => {
         });
     } catch (error) {
         console.error('Batch caption render error:', error);
-        res.status(500).json({ success: false, error: 'Failed to render captioned clips', details: error.message });
+        res.status(error.statusCode || 500).json({
+            success: false,
+            error: error.statusCode ? error.message : 'Failed to render captioned clips',
+            details: error.statusCode ? undefined : error.message,
+        });
     }
 });
 

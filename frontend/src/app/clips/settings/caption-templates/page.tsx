@@ -25,6 +25,7 @@ interface CaptionTemplate {
     name: string;
     description?: string;
     isSeeded: boolean;
+    usage?: "captions" | "hooks" | "both";
     fontName: string;
     fontColor: string;
     outlineColor: string;
@@ -43,6 +44,18 @@ interface CaptionTemplate {
     borderStyle: number;
     preview?: { backgroundColor?: string };
     layouts: { portrait: LayoutStyle; square: LayoutStyle; landscape: LayoutStyle };
+}
+
+function usageLabel(usage?: CaptionTemplate["usage"]) {
+    if (usage === "captions") return "Captions only";
+    if (usage === "hooks") return "Hooks only";
+    return "Captions + hooks";
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+    return axios.isAxiosError<{ error?: string }>(error)
+        ? error.response?.data?.error || fallback
+        : fallback;
 }
 
 export default function CaptionTemplatesPage() {
@@ -68,8 +81,8 @@ export default function CaptionTemplatesPage() {
         try {
             await axios.post(`${API_URL}/clips/caption-templates/${id}/duplicate`);
             await fetchTemplates();
-        } catch (e: any) {
-            setError(e.response?.data?.error || "Failed to duplicate");
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, "Failed to duplicate"));
         } finally {
             setDuplicatingId(null);
         }
@@ -81,8 +94,8 @@ export default function CaptionTemplatesPage() {
         try {
             await axios.delete(`${API_URL}/clips/caption-templates/${id}`);
             setTemplates((prev) => prev.filter((t) => t.id !== id));
-        } catch (e: any) {
-            setError(e.response?.data?.error || "Failed to delete");
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, "Failed to delete"));
         } finally {
             setDeletingId(null);
         }
@@ -134,6 +147,11 @@ export default function CaptionTemplatesPage() {
                                     <Badge variant="secondary" className="text-[10px] px-1 py-0">Default</Badge>
                                 </div>
                             )}
+                            <div className="absolute bottom-1 left-1">
+                                <Badge variant="outline" className="bg-background/90 text-[10px] px-1 py-0">
+                                    {usageLabel(template.usage)}
+                                </Badge>
+                            </div>
                         </div>
                         <div>
                             <p className="text-sm font-medium truncate">{template.name}</p>

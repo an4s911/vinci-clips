@@ -108,13 +108,13 @@ describe('captioning ASS generation', () => {
         expect(ass).toContain('Style: Default,DejaVu Sans,20,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,0,2,60,70,20,1');
     });
 
-    test('serializes hook ASS scale values as ASS percentages', () => {
+    test('serializes hook ASS from the template values directly', () => {
         const ass = buildHookASSContent('Hook text', {
             ...style,
-            hookOverrides: { scaleY: 1.2, marginV: 50 },
+            scaleY: 1.2,
         }, { width: 720, height: 1280, duration: 3 });
 
-        expect(ass).toContain('Style: Hook,DejaVu Sans,22,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,120,0,0,1,2,0,8,58,58,50,1');
+        expect(ass).toContain('Style: Hook,DejaVu Sans,20,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,120,0,0,1,2,0,2,60,70,20,1');
     });
 
     test('keeps legacy force_style scale values as multipliers', () => {

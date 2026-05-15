@@ -5,7 +5,13 @@ const fs = require('fs');
 const ffmpeg = require('fluent-ffmpeg');
 const Transcript = require('../models/Transcript');
 const logger = require('../utils/logger');
-const { moveFileSafe, renderCaptionedVideo } = require('../utils/captioning');
+const {
+    getCaptionStylesForClient,
+    moveFileSafe,
+    renderCaptionedVideo,
+    templateAllowsCaptions,
+    templateAllowsHooks,
+} = require('../utils/captioning');
 const {
     appendPrimaryClipVideo,
     buildGeneratedClipsMap,
@@ -29,6 +35,20 @@ const ASPECT_RATIOS = {
     'youtube': { width: 16, height: 9, name: 'YouTube Landscape' },
     'story': { width: 9, height: 16, name: 'Instagram/Facebook Story' }
 };
+
+async function validateTemplateUsage(styleId, useCase) {
+    if (!styleId) return;
+    const styles = await getCaptionStylesForClient();
+    const template = styles.find((style) => style.id === styleId);
+    if (!template) return;
+    const valid = useCase === 'hooks' ? templateAllowsHooks(template) : templateAllowsCaptions(template);
+    if (!valid) {
+        const label = useCase === 'hooks' ? 'hooks' : 'captions';
+        const error = new Error(`Template "${template.name}" cannot be used for ${label}.`);
+        error.statusCode = 400;
+        throw error;
+    }
+}
 
 // --- Time Conversion Helpers ---
 function timeToSeconds(timeStr) {
@@ -279,6 +299,12 @@ router.post('/generate', async (req, res) => {
         if (captionsOnly && !hasOverlay) {
             return res.status(400).json({ error: 'Enable captions or a top hook to keep the original frame.' });
         }
+        if (captions?.enabled) {
+            await validateTemplateUsage(captions.style, 'captions');
+        }
+        if (normalizedHook.enabled && hookStyleId) {
+            await validateTemplateUsage(hookStyleId, 'hooks');
+        }
         
         const transcript = await Transcript.findById(transcriptId);
         if (!transcript || !transcript.videoUrl) {
@@ -343,7 +369,7 @@ router.post('/generate', async (req, res) => {
                     outputPath: captionedOutputPath,
                     transcriptSegments: transcript.transcript,
                     styleId: captions.style,
-                    hookStyleId: hookStyleId || captions.style,
+                    hookStyleId: hookStyleId || (captions?.enabled ? captions.style : undefined),
                     clipDefinition,
                     clipTimeline,
                     captionsEnabled: Boolean(captions?.enabled),
@@ -374,7 +400,7 @@ router.post('/generate', async (req, res) => {
                 outputPath: captionedOutputPath,
                 transcriptSegments: transcript.transcript,
                 styleId: captions.style,
-                hookStyleId: hookStyleId || captions.style,
+                hookStyleId: hookStyleId || (captions?.enabled ? captions.style : undefined),
                 clipDefinition,
                 clipTimeline,
                 captionsEnabled: Boolean(captions?.enabled),
@@ -436,7 +462,10 @@ router.post('/generate', async (req, res) => {
         
     } catch (error) {
         logger.logError(error, { context: 'reframe_generation' });
-        res.status(500).json({ error: 'Failed to generate reframed video', details: error.message });
+        res.status(error.statusCode || 500).json({
+            error: error.statusCode ? error.message : 'Failed to generate reframed video',
+            details: error.statusCode ? undefined : error.message,
+        });
     }
 });
 

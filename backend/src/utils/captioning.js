@@ -47,6 +47,7 @@ function resolveTemplateForLayout(template, layout) {
         id: template.id,
         name: template.name,
         description: template.description,
+        usage: template.usage || 'both',
         layout,
         fontName: template.fontName,
         fontcolor: template.fontColor,
@@ -64,22 +65,56 @@ function resolveTemplateForLayout(template, layout) {
         spacing: template.spacing,
         uppercase: template.uppercase,
         borderStyle: template.borderStyle,
-        hookOverrides: template.hookOverrides || {},
         preview: template.preview || {},
         ...layoutData,
     };
 }
 
-async function getResolvedStyle(styleId, videoDimensions) {
+const TEMPLATE_USAGE = {
+    CAPTIONS: 'captions',
+    HOOKS: 'hooks',
+    BOTH: 'both',
+};
+
+function normalizeTemplateUsage(usage) {
+    return [TEMPLATE_USAGE.CAPTIONS, TEMPLATE_USAGE.HOOKS, TEMPLATE_USAGE.BOTH].includes(usage)
+        ? usage
+        : TEMPLATE_USAGE.BOTH;
+}
+
+function templateAllowsCaptions(template) {
+    const usage = normalizeTemplateUsage(template?.usage);
+    return usage === TEMPLATE_USAGE.CAPTIONS || usage === TEMPLATE_USAGE.BOTH;
+}
+
+function templateAllowsHooks(template) {
+    const usage = normalizeTemplateUsage(template?.usage);
+    return usage === TEMPLATE_USAGE.HOOKS || usage === TEMPLATE_USAGE.BOTH;
+}
+
+async function getResolvedStyle(styleId, videoDimensions, options = {}) {
     const fallbackId = 'bold-yellow';
+    const useCase = options.useCase || null;
+    const allowsUseCase = useCase === 'hooks'
+        ? templateAllowsHooks
+        : useCase === 'captions'
+            ? templateAllowsCaptions
+            : () => true;
     let template = styleId
         ? await prisma.captionTemplate.findUnique({ where: { id: styleId } })
         : null;
+    if (styleId && template && !allowsUseCase(template)) {
+        throw new Error(`Template "${template.name}" cannot be used for ${useCase}.`);
+    }
     if (!template) {
         template = await prisma.captionTemplate.findUnique({ where: { id: fallbackId } });
     }
+    if (template && !allowsUseCase(template)) {
+        template = null;
+    }
     if (!template) {
-        template = await prisma.captionTemplate.findFirst({ orderBy: { createdAt: 'asc' } });
+        const allTemplates = await prisma.captionTemplate.findMany({ orderBy: { createdAt: 'asc' } });
+        template = allTemplates.find(allowsUseCase) || null;
     }
     if (!template) {
         throw new Error('No caption templates found in database');
@@ -203,26 +238,12 @@ function getASSPlayRes(videoDimensions) {
 
 function buildHookASSContent(text, resolvedStyle, videoDimensions) {
     const playRes = getASSPlayRes(videoDimensions);
-    const hookOverrides = resolvedStyle.hookOverrides || {};
-    const fontSizeMultiplier = hookOverrides.fontSizeMultiplier ?? 1.08;
-    const hookFontSize = Math.round((resolvedStyle.fontSize || 20) * fontSizeMultiplier);
-
-    const positionToAlignment = { top: 8, center: 5, bottom: 2 };
-    const hookAlignment = positionToAlignment[hookOverrides.position ?? 'top'] ?? 8;
-
-    const topMargin = hookOverrides.marginV ?? (
-        resolvedStyle.layout === 'portrait' ? 70 : resolvedStyle.layout === 'square' ? 48 : 36
-    );
+    const hookFontSize = Math.round(resolvedStyle.fontSize || 20);
     const sideMargin = Math.max(32, Math.round(videoDimensions.width * 0.08));
     const duration = videoDimensions.duration || 24 * 60 * 60;
-    const hookColor = hookOverrides.color
-        ? convertColorToASS(hookOverrides.color)
-        : convertColorToASS(resolvedStyle.fontcolor);
-    const hookScaleY = hookOverrides.scaleY != null
-        ? hookOverrides.scaleY
-        : (resolvedStyle.scaleY ?? 1);
-    const hookScaleXASS = convertScaleToASSPercent(1);
-    const hookScaleYASS = convertScaleToASSPercent(hookScaleY);
+    const hookColor = convertColorToASS(resolvedStyle.fontcolor);
+    const hookScaleXASS = convertScaleToASSPercent(resolvedStyle.scaleX ?? 1);
+    const hookScaleYASS = convertScaleToASSPercent(resolvedStyle.scaleY ?? 1);
 
     const hookBorderStyle = resolvedStyle.borderStyle ?? 1;
     // libass uses OutlineColour as box fill for BorderStyle=3
@@ -240,7 +261,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Hook,${resolvedStyle.fontName},${hookFontSize},${hookColor},&H000000FF,${hookOutlineColour},${hookBackColour},${resolvedStyle.bold ? -1 : 0},${resolvedStyle.italic ? 1 : 0},0,0,${hookScaleXASS},${hookScaleYASS},0,0,${hookBorderStyle},${resolvedStyle.borderw},${resolvedStyle.shadow ? (resolvedStyle.shadowDepth ?? 1) : 0},${hookAlignment},${sideMargin},${sideMargin},${topMargin},1
+Style: Hook,${resolvedStyle.fontName},${hookFontSize},${hookColor},&H000000FF,${hookOutlineColour},${hookBackColour},${resolvedStyle.bold ? -1 : 0},${resolvedStyle.italic ? 1 : 0},${resolvedStyle.underline ? 1 : 0},0,${hookScaleXASS},${hookScaleYASS},${resolvedStyle.spacing ?? 0},0,${hookBorderStyle},${resolvedStyle.borderw},${resolvedStyle.shadow ? (resolvedStyle.shadowDepth ?? 1) : 0},${resolvedStyle.alignment ?? 2},${resolvedStyle.marginL ?? sideMargin},${resolvedStyle.marginR ?? sideMargin},${resolvedStyle.marginV ?? 20},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -520,12 +541,16 @@ async function renderCaptionedVideo({
     videoDimensions: videoDimensionsOverride = null,
 }) {
     const videoDimensions = videoDimensionsOverride || await probeVideoDimensions(inputPath);
-    const resolvedStyle = await getResolvedStyle(styleId, videoDimensions);
-    const resolvedHookStyle = hookStyleId
-        ? await getResolvedStyle(hookStyleId, videoDimensions)
-        : resolvedStyle;
     const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
     const hookEnabled = Boolean(hook?.enabled && hookText);
+    const resolvedStyle = captionsEnabled
+        ? await getResolvedStyle(styleId, videoDimensions, { useCase: 'captions' })
+        : null;
+    const resolvedHookStyle = hookEnabled && hookStyleId
+        ? await getResolvedStyle(hookStyleId, videoDimensions, { useCase: 'hooks' })
+        : (resolvedStyle && templateAllowsHooks(resolvedStyle))
+            ? resolvedStyle
+            : (hookEnabled ? await getResolvedStyle(null, videoDimensions, { useCase: 'hooks' }) : null);
 
     const tempDir = path.dirname(outputPath);
     fs.mkdirSync(tempDir, { recursive: true });
@@ -610,6 +635,9 @@ module.exports = {
     resolveTemplateForLayout,
     getCaptionStylesForClient,
     getResolvedStyle,
+    normalizeTemplateUsage,
+    templateAllowsCaptions,
+    templateAllowsHooks,
     moveFileSafe,
     probeVideoDimensions,
     renderCaptionedVideo,

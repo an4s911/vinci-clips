@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
-    ChevronLeft, Save, Loader2, Play, RotateCcw, Smartphone, Square, Monitor
+    ChevronLeft, Save, Loader2, Play, Smartphone, Square, Monitor
 } from "lucide-react";
 import {
     CaptionTemplatePreview,
@@ -28,20 +28,12 @@ interface LayoutStyle {
     previewFontSize: number;
 }
 
-interface HookOverrides {
-    enabled: boolean;
-    fontSizeMultiplier: number;
-    position: "top" | "center" | "bottom";
-    marginV: number;
-    color?: string;
-    scaleY?: number;
-}
-
 interface CaptionTemplate {
     id: string;
     name: string;
     description: string;
     isSeeded: boolean;
+    usage: "captions" | "hooks" | "both";
     fontName: string;
     fontColor: string;
     outlineColor: string;
@@ -60,12 +52,12 @@ interface CaptionTemplate {
     borderStyle: number;
     preview: { backgroundColor?: string };
     layouts: { portrait: LayoutStyle; square: LayoutStyle; landscape: LayoutStyle };
-    hookOverrides: HookOverrides;
 }
 
 const DEFAULT_TEMPLATE: Omit<CaptionTemplate, "id" | "isSeeded"> = {
     name: "New Template",
     description: "",
+    usage: "both",
     fontName: "DejaVu Sans",
     fontColor: "#ffffff",
     outlineColor: "#000000",
@@ -88,12 +80,6 @@ const DEFAULT_TEMPLATE: Omit<CaptionTemplate, "id" | "isSeeded"> = {
         square: { fontSize: 20, maxWordsPerPhrase: 3, marginV: 25, marginL: 50, marginR: 50, previewFontSize: 14 },
         landscape: { fontSize: 18, maxWordsPerPhrase: 4, marginV: 20, marginL: 40, marginR: 40, previewFontSize: 12 },
     },
-    hookOverrides: {
-        enabled: true,
-        fontSizeMultiplier: 1.08,
-        position: "top",
-        marginV: 50,
-    },
 };
 
 const FONTS = [
@@ -115,67 +101,16 @@ const ASPECT_OPTIONS = [
 
 type AspectId = typeof ASPECT_OPTIONS[number]["id"];
 
-function fontFamilyCSS(fontName: string): string {
-    const lower = fontName.toLowerCase();
-    if (lower.includes("mono") || lower === "courier") return `"${fontName}", monospace`;
-    return `"${fontName}", sans-serif`;
-}
+const USAGE_OPTIONS = [
+    { id: "captions", label: "Captions only" },
+    { id: "hooks", label: "Hooks only" },
+    { id: "both", label: "Captions + hooks" },
+] as const;
 
-function computeCaptionCSS(template: CaptionTemplate, layout: LayoutStyle): React.CSSProperties {
-    const alignment = template.alignment ?? 2;
-    // ASS numpad: 1=BL 2=BC 3=BR, 4=ML 5=MC 6=MR, 7=TL 8=TC 9=TR
-    const col = (alignment - 1) % 3;           // 0=left, 1=center, 2=right
-    const row = Math.floor((alignment - 1) / 3); // 0=bottom, 1=middle, 2=top
-
-    const sx = template.scaleX ?? 1;
-    const sy = template.scaleY ?? 1;
-    const shadowDepth = template.shadowDepth ?? 1;
-    const shadow = template.shadow
-        ? `${shadowDepth}px ${shadowDepth}px ${shadowDepth * 2}px rgba(0,0,0,0.8)`
-        : "none";
-    const bg = template.borderStyle === 3 && template.backColor ? template.backColor : "transparent";
-    const hasOutline = template.outlineWidth > 0;
-    const previewFontSize = Math.max(8, Math.round(layout.fontSize * 0.5));
-    const textAlign: 'left' | 'center' | 'right' = col === 0 ? 'left' : col === 2 ? 'right' : 'center';
-
-    const pos: React.CSSProperties = { position: 'absolute' };
-    if (col === 0) pos.left = layout.marginL;
-    else if (col === 2) pos.right = layout.marginR;
-    else pos.left = '50%';
-
-    if (row === 0) pos.bottom = layout.marginV;
-    else if (row === 2) pos.top = layout.marginV;
-    else pos.top = '50%';
-
-    const tx = col === 1 ? '-50%' : '0%';
-    const ty = row === 1 ? '-50%' : '0%';
-    const transform = (tx !== '0%' || ty !== '0%')
-        ? `translate(${tx}, ${ty}) scale(${sx}, ${sy})`
-        : `scale(${sx}, ${sy})`;
-
-    const toH = col === 0 ? 'left' : col === 2 ? 'right' : 'center';
-    const toV = row === 0 ? 'bottom' : row === 2 ? 'top' : 'center';
-
-    return {
-        ...pos,
-        transform,
-        transformOrigin: `${toH} ${toV}`,
-        textAlign,
-        fontSize: previewFontSize,
-        fontWeight: template.bold ? 800 : 400,
-        fontStyle: template.italic ? "italic" : "normal",
-        textDecoration: template.underline ? "underline" : "none",
-        fontFamily: fontFamilyCSS(template.fontName),
-        color: template.fontColor,
-        background: bg,
-        textShadow: shadow,
-        textTransform: template.uppercase ? "uppercase" : "none",
-        WebkitTextStroke: hasOutline ? `${template.outlineWidth}px ${template.outlineColor}` : undefined,
-        paintOrder: "stroke fill",
-        lineHeight: 1.2,
-        whiteSpace: "nowrap",
-        zIndex: 10,
-    } as React.CSSProperties;
+function getErrorMessage(error: unknown, fallback: string) {
+    return axios.isAxiosError<{ error?: string }>(error)
+        ? error.response?.data?.error || fallback
+        : fallback;
 }
 
 function NumberInput({ label, value, onChange, min, max, step = 1 }: {
@@ -241,12 +176,12 @@ export default function CaptionTemplateEditorPage() {
     useEffect(() => {
         if (isNew) return;
         axios.get(`${API_URL}/clips/caption-templates/${params.id}`)
-            .then((res) => setTemplate(res.data.template))
-            .catch((e) => setError(e.response?.data?.error || "Failed to load template"))
+            .then((res) => setTemplate({ ...res.data.template, usage: res.data.template.usage || "both" }))
+            .catch((e: unknown) => setError(getErrorMessage(e, "Failed to load template")))
             .finally(() => setLoading(false));
     }, [params.id, isNew]);
 
-    const set = (key: keyof CaptionTemplate, value: any) =>
+    const set = <K extends keyof CaptionTemplate>(key: K, value: CaptionTemplate[K]) =>
         setTemplate((prev) => ({ ...prev, [key]: value }));
 
     const setLayout = (aspect: "portrait" | "square" | "landscape", key: keyof LayoutStyle, value: number) =>
@@ -254,9 +189,6 @@ export default function CaptionTemplateEditorPage() {
             ...prev,
             layouts: { ...prev.layouts, [aspect]: { ...prev.layouts[aspect], [key]: value } },
         }));
-
-    const setHook = (key: keyof HookOverrides, value: any) =>
-        setTemplate((prev) => ({ ...prev, hookOverrides: { ...prev.hookOverrides, [key]: value } }));
 
     const setPreviewBgColor = (value: string) =>
         setTemplate((prev) => ({
@@ -275,8 +207,8 @@ export default function CaptionTemplateEditorPage() {
                 const res = await axios.put(`${API_URL}/clips/caption-templates/${template.id}`, template);
                 setTemplate(res.data.template);
             }
-        } catch (e: any) {
-            setError(e.response?.data?.error || "Failed to save");
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, "Failed to save"));
         } finally {
             setSaving(false);
         }
@@ -294,8 +226,8 @@ export default function CaptionTemplateEditorPage() {
             });
             setPreviewVideoUrl(`${API_URL}${res.data.previewUrl}`);
             setTimeout(() => videoRef.current?.play(), 200);
-        } catch (e: any) {
-            setError(e.response?.data?.error || "Preview render failed");
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, "Preview render failed"));
         } finally {
             setRenderingPreview(false);
         }
@@ -311,7 +243,7 @@ export default function CaptionTemplateEditorPage() {
 
     if (loading) return <div className="flex h-screen items-center justify-center"><Loader2 className="animate-spin" /></div>;
 
-    const sections = ["typography", "colors", "position", "layouts", "hook"] as const;
+    const sections = ["typography", "colors", "position", "layouts"] as const;
 
     return (
         <main className="container mx-auto max-w-6xl p-6 space-y-6">
@@ -349,6 +281,25 @@ export default function CaptionTemplateEditorPage() {
                         <Label className="text-xs text-muted-foreground">Description</Label>
                         <Input value={template.description} onChange={(e) => set("description", e.target.value)}
                             placeholder="Optional description" className="h-8 text-sm" />
+                    </div>
+
+                    <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">Use Template For</Label>
+                        <div className="grid grid-cols-3 gap-2">
+                            {USAGE_OPTIONS.map((option) => (
+                                <button
+                                    key={option.id}
+                                    onClick={() => set("usage", option.id)}
+                                    className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                                        template.usage === option.id
+                                            ? "border-primary bg-primary text-primary-foreground"
+                                            : "border-input hover:border-gray-400"
+                                    }`}
+                                >
+                                    {option.label}
+                                </button>
+                            ))}
+                        </div>
                     </div>
 
                     <div className="flex gap-1 flex-wrap border-b pb-2">
@@ -495,55 +446,6 @@ export default function CaptionTemplateEditorPage() {
                         </Card>
                     )}
 
-                    {/* Hook overrides */}
-                    {activeSection === "hook" && (
-                        <Card>
-                            <CardHeader><CardTitle className="text-sm">Hook Overrides</CardTitle></CardHeader>
-                            <CardContent className="space-y-4">
-                                <Toggle label="Enable hook rendering" checked={template.hookOverrides.enabled}
-                                    onChange={(v) => setHook("enabled", v)} />
-                                <div className="grid grid-cols-2 gap-3">
-                                    <NumberInput label="Font Size Multiplier" value={template.hookOverrides.fontSizeMultiplier}
-                                        onChange={(v) => setHook("fontSizeMultiplier", v)} min={0.5} max={3} step={0.05} />
-                                    <NumberInput label="Margin V" value={template.hookOverrides.marginV}
-                                        onChange={(v) => setHook("marginV", v)} min={0} max={500} />
-                                </div>
-                                <div className="space-y-1">
-                                    <Label className="text-xs text-muted-foreground">Position</Label>
-                                    <div className="flex gap-2">
-                                        {(["top", "center", "bottom"] as const).map((pos) => (
-                                            <button key={pos} onClick={() => setHook("position", pos)}
-                                                className={`flex-1 py-1.5 text-xs rounded-md border capitalize transition-colors ${template.hookOverrides.position === pos ? "bg-primary text-primary-foreground border-primary" : "border-input hover:border-gray-400"}`}>
-                                                {pos}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                                <div className="space-y-1">
-                                    <Label className="text-xs text-muted-foreground">Color Override (empty = use text color)</Label>
-                                    <div className="flex gap-2">
-                                        <input type="color" value={template.hookOverrides.color || template.fontColor}
-                                            onChange={(e) => setHook("color", e.target.value)}
-                                            className="h-8 w-10 rounded border cursor-pointer p-0.5" />
-                                        <Input value={template.hookOverrides.color || ""}
-                                            onChange={(e) => setHook("color", e.target.value || undefined)}
-                                            placeholder="(same as text color)" className="h-8 text-sm font-mono" />
-                                        {template.hookOverrides.color && (
-                                            <Button size="sm" variant="ghost" onClick={() => setHook("color", undefined)}>
-                                                <RotateCcw className="h-3 w-3" />
-                                            </Button>
-                                        )}
-                                    </div>
-                                </div>
-                                <NumberInput
-                                    label="Scale Y Override (%)"
-                                    value={Math.round((template.hookOverrides.scaleY ?? template.scaleY ?? 1) * 100)}
-                                    onChange={(v) => setHook("scaleY", v / 100)}
-                                    min={10} max={300}
-                                />
-                            </CardContent>
-                        </Card>
-                    )}
                 </div>
 
                 {/* Right: preview */}

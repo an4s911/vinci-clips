@@ -24,6 +24,7 @@ interface CaptionTemplate {
     id: string;
     name: string;
     description?: string;
+    usage?: 'captions' | 'hooks' | 'both';
     fontName: string;
     fontColor: string;
     outlineColor: string;
@@ -51,6 +52,12 @@ function fontFamilyCSS(fontName: string): string {
     return `"${fontName}", sans-serif`;
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+    return axios.isAxiosError<{ error?: string }>(error)
+        ? error.response?.data?.error || fallback
+        : fallback;
+}
+
 interface CaptionGeneratorProps {
     transcriptId: string;
     videoUrl: string;
@@ -72,9 +79,10 @@ export default function CaptionGenerator({ transcriptId, videoUrl }: CaptionGene
 
     const fetchTemplates = async () => {
         try {
-            const response = await axios.get(`${API_URL}/clips/caption-templates`);
-            setTemplates(response.data.templates);
-            if (response.data.templates.length > 0) setSelectedTemplate(response.data.templates[0].id);
+            const response = await axios.get(`${API_URL}/clips/captions/styles`);
+            const captionTemplates = response.data.captionStyles || [];
+            setTemplates(captionTemplates);
+            if (captionTemplates.length > 0) setSelectedTemplate(captionTemplates[0].id);
         } catch (err) {
             console.error('Failed to fetch caption templates:', err);
             setError('Failed to load caption templates');
@@ -97,8 +105,8 @@ export default function CaptionGenerator({ transcriptId, videoUrl }: CaptionGene
             } else {
                 setError(response.data.error || 'Failed to generate captioned video');
             }
-        } catch (err: any) {
-            setError(err.response?.data?.error || 'Failed to generate captioned video');
+        } catch (err: unknown) {
+            setError(getErrorMessage(err, 'Failed to generate captioned video'));
         } finally {
             setGenerating(false);
         }

@@ -56,6 +56,7 @@ model CaptionTemplate {
   name        String
   description String?
   isSeeded    Boolean  @default(false)
+  usage       String   @default("both")
 
   fontName    String   @default("DejaVu Sans")
   fontColor   String   @default("#ffffff")
@@ -76,7 +77,6 @@ model CaptionTemplate {
 
   layouts     Json
   preview     Json
-  hookOverrides Json
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
