@@ -117,7 +117,6 @@ function getCaptionCSS(
         lineHeight: 1.2,
         whiteSpace: "nowrap",
         maxWidth: "86%",
-        zIndex: 10,
     } as React.CSSProperties;
 }
 
