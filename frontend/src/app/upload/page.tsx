@@ -325,8 +325,12 @@ export default function UploadClient() {
       setRecentTranscripts(refreshResponse.data.slice(0, 6));
       setIsPolling(true);
     } catch (error: unknown) {
-      console.error('Error retrying transcription:', error);
-      setMessage(getErrorMessage(error, 'Failed to retry transcription.', true));
+      const status = (error as {response?: {status?: number}})?.response?.status;
+      if (status === 400) {
+        setMessage('Cannot retry transcription — the video file was not saved. Delete this entry and re-import the video.');
+      } else {
+        setMessage(getErrorMessage(error, 'Failed to retry transcription.', true));
+      }
     } finally {
       setRetryingIds(prev => ({ ...prev, [id]: false }));
     }
@@ -506,7 +510,7 @@ export default function UploadClient() {
                             {cancellingIds[transcript._id] || transcript.processingJob?.status === 'cancelling' ? 'Stopping...' : 'Stop Processing'}
                           </Button>
                         )}
-                        {transcript.status === 'failed' && transcript.mp3Url && (
+                        {transcript.status === 'failed' && (
                           <Button
                             onClick={(e) => handleRetryTranscription(transcript._id, e)}
                             variant="outline"
