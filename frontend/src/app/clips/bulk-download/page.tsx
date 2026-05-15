@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Check, Download, Film, Loader2, Square, SquareCheckBig } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
@@ -59,18 +59,27 @@ function getDownloadFilename(disposition?: string) {
     return match?.[1] || 'vinci-primary-clips.zip';
 }
 
-async function getDownloadErrorMessage(error: any) {
-    const data = error.response?.data;
+function isErrorPayload(value: unknown): value is { details?: string; error?: string } {
+    return typeof value === 'object' && value !== null;
+}
+
+async function getDownloadErrorMessage(error: unknown) {
+    const data = axios.isAxiosError(error) ? error.response?.data : undefined;
     if (data instanceof Blob) {
         const text = await data.text();
         try {
-            const parsed = JSON.parse(text);
-            return parsed.details || parsed.error || 'Failed to download selected clips.';
+            const parsed: unknown = JSON.parse(text);
+            if (isErrorPayload(parsed)) {
+                return parsed.details || parsed.error || 'Failed to download selected clips.';
+            }
+            return 'Failed to download selected clips.';
         } catch {
             return text || 'Failed to download selected clips.';
         }
     }
-    return data?.details || data?.error || 'Failed to download selected clips.';
+    return isErrorPayload(data)
+        ? data.details || data.error || 'Failed to download selected clips.'
+        : 'Failed to download selected clips.';
 }
 
 export default function BulkClipDownloadPage() {
@@ -170,7 +179,7 @@ export default function BulkClipDownloadPage() {
             link.click();
             link.remove();
             URL.revokeObjectURL(url);
-        } catch (err: any) {
+        } catch (err: unknown) {
             setError(await getDownloadErrorMessage(err));
             console.error(err);
         } finally {

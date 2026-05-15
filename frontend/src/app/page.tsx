@@ -28,11 +28,6 @@ export default function LandingPage() {
     };
   }, []);
 
-  const handleTryBeta = () => {
-    // Navigate to the upload page (your current functionality)
-    window.location.href = '/upload';
-  };
-
   const handleGitHub = () => {
     window.open('https://github.com/tryvinci/vinci-clips', '_blank');
   };
@@ -381,8 +376,4 @@ export default function LandingPage() {
       </main>
     </>
   );
-}
-
-function handleGitHub() {
-  window.open('https://github.com/tryvinci/vinci-clips', '_blank');
 }

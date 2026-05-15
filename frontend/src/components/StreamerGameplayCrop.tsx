@@ -283,9 +283,12 @@ function StreamerGameplayCropComponent({ transcriptId, videoUrl, onRestart }: St
       } else {
         setError(response.data.error || 'Failed to process video');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Video processing failed:', error);
-      setError(error.response?.data?.error || 'Failed to process video');
+      const message = axios.isAxiosError<{ error?: string }>(error)
+        ? error.response?.data?.error || 'Failed to process video'
+        : 'Failed to process video';
+      setError(message);
     } finally {
       setIsProcessing(false);
     }
