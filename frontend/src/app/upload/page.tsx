@@ -9,8 +9,28 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { UploadCloud, Clock, CheckCircle, AlertCircle, Loader2, Link as LinkIcon, Globe, Trash2, Download, StopCircle } from 'lucide-react';
 import Link from 'next/link';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
+function getErrorMessage(error: unknown, fallback: string, preferDetails = false) {
+  if (!axios.isAxiosError<{ error?: string; details?: string }>(error)) {
+    return fallback;
+  }
+
+  const data = error.response?.data;
+  return preferDetails
+    ? data?.details || data?.error || fallback
+    : data?.error || data?.details || fallback;
+}
 
 interface ProcessingJob {
   status: 'idle' | 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
@@ -47,6 +67,8 @@ export default function UploadClient() {
   const [isPolling, setIsPolling] = useState(false);
   const [retryingIds, setRetryingIds] = useState<Record<string, boolean>>({});
   const [cancellingIds, setCancellingIds] = useState<Record<string, boolean>>({});
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string, name: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const isTranscriptProcessing = (transcript: Transcript) => (
     transcript.processingJob
@@ -239,10 +261,9 @@ export default function UploadClient() {
       setRecentTranscripts(refreshResponse.data.slice(0, 6));
       setIsPolling(true);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error importing URL:', error);
-      const errorMessage = error.response?.data?.error || 'Failed to import video from URL.';
-      setMessage(errorMessage);
+      setMessage(getErrorMessage(error, 'Failed to import video from URL.'));
     } finally {
       setUploading(false);
     }
@@ -260,27 +281,33 @@ export default function UploadClient() {
       }
       setMessage('Processing was cancelled.');
       setIsPolling(true);
-    } catch (error: any) {
-      setMessage(error.response?.data?.error || 'Failed to cancel processing.');
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'Failed to cancel processing.'));
     } finally {
       setCancellingIds(prev => ({ ...prev, [id]: false }));
     }
   };
 
-  const handleDelete = async (id: string, e: React.MouseEvent) => {
-    e.preventDefault(); // Prevent navigation
-    e.stopPropagation(); // Prevent event bubbling
+  const handleDeleteClick = (id: string, name: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setConfirmDelete({ id, name });
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDelete) return;
     
-    if (confirm('Are you sure you want to delete this video? This action cannot be undone.')) {
-      try {
-        await axios.delete(`${API_URL}/clips/transcripts/${id}`);
-        // Remove the deleted transcript from the state
-        setRecentTranscripts(prev => prev.filter(t => t._id !== id));
-        setMessage('Video deleted successfully');
-      } catch (error) {
-        console.error('Error deleting video:', error);
-        setMessage('Failed to delete video');
-      }
+    setIsDeleting(true);
+    try {
+      await axios.delete(`${API_URL}/clips/transcripts/${confirmDelete.id}`);
+      setRecentTranscripts(prev => prev.filter(t => t._id !== confirmDelete.id));
+      setMessage('Video deleted successfully');
+      setConfirmDelete(null);
+    } catch (error) {
+      console.error('Error deleting video:', error);
+      setMessage('Failed to delete video');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -297,10 +324,9 @@ export default function UploadClient() {
       const refreshResponse = await axios.get(`${API_URL}/clips/transcripts`);
       setRecentTranscripts(refreshResponse.data.slice(0, 6));
       setIsPolling(true);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error retrying transcription:', error);
-      const errorMessage = error.response?.data?.details || error.response?.data?.error || 'Failed to retry transcription.';
-      setMessage(errorMessage);
+      setMessage(getErrorMessage(error, 'Failed to retry transcription.', true));
     } finally {
       setRetryingIds(prev => ({ ...prev, [id]: false }));
     }
@@ -428,7 +454,7 @@ export default function UploadClient() {
                           <CardTitle className="text-lg truncate pr-2">{transcript.originalFilename}</CardTitle>
                           <Trash2
                             className="h-4 w-4 text-red-500 cursor-pointer mr-2 hover:text-red-700 flex-shrink-0"
-                            onClick={(e) => handleDelete(transcript._id, e)}
+                            onClick={(e) => handleDeleteClick(transcript._id, transcript.originalFilename, e)}
                           />
                         </div>
                         <div className="flex-shrink-0">
@@ -499,6 +525,30 @@ export default function UploadClient() {
           </div>
         </div>
       </main>
+
+      <AlertDialog open={!!confirmDelete} onOpenChange={(open) => !open && setConfirmDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Video</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete &quot;{confirmDelete?.name}&quot;? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                handleConfirmDelete();
+              }}
+              className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+              disabled={isDeleting}
+            >
+              {isDeleting ? "Deleting..." : "Delete Video"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

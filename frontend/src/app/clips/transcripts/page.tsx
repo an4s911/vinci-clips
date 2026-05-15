@@ -6,6 +6,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 import { Download, Trash2 } from 'lucide-react';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 interface Transcript {
     _id: string;
@@ -17,6 +27,8 @@ export default function TranscriptsPage() {
     const [transcripts, setTranscripts] = useState<Transcript[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [confirmDelete, setConfirmDelete] = useState<{ id: string, name: string } | null>(null);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     useEffect(() => {
         const fetchTranscripts = async () => {
@@ -34,18 +46,25 @@ export default function TranscriptsPage() {
         fetchTranscripts();
     }, []);
 
-    const handleDelete = async (id: string, e: React.MouseEvent) => {
+    const handleDeleteClick = (id: string, name: string, e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
+        setConfirmDelete({ id, name });
+    };
+
+    const handleConfirmDelete = async () => {
+        if (!confirmDelete) return;
         
-        if (confirm('Are you sure you want to delete this video? This action cannot be undone.')) {
-            try {
-                await axios.delete(`${API_URL}/clips/transcripts/${id}`);
-                setTranscripts(prev => prev.filter(t => t._id !== id));
-            } catch (error) {
-                console.error('Error deleting video:', error);
-                setError('Failed to delete video');
-            }
+        setIsDeleting(true);
+        try {
+            await axios.delete(`${API_URL}/clips/transcripts/${confirmDelete.id}`);
+            setTranscripts(prev => prev.filter(t => t._id !== confirmDelete.id));
+            setConfirmDelete(null);
+        } catch (error) {
+            console.error('Error deleting video:', error);
+            setError('Failed to delete video');
+        } finally {
+            setIsDeleting(false);
         }
     };
 
@@ -76,7 +95,7 @@ export default function TranscriptsPage() {
                                 <CardTitle className="truncate pr-2 flex-1 w-0">{transcript.originalFilename}</CardTitle>
                                 <Trash2
                                     className="h-4 w-4 text-red-500 cursor-pointer hover:text-red-700 flex-shrink-0"
-                                    onClick={(e) => handleDelete(transcript._id, e)}
+                                    onClick={(e) => handleDeleteClick(transcript._id, transcript.originalFilename, e)}
                                 />
                             </div>
                         </CardHeader>
@@ -91,6 +110,30 @@ export default function TranscriptsPage() {
                     </Card>
                 ))}
             </div>
+
+            <AlertDialog open={!!confirmDelete} onOpenChange={(open) => !open && setConfirmDelete(null)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Video</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you sure you want to delete &quot;{confirmDelete?.name}&quot;? This action cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={(e) => {
+                                e.preventDefault();
+                                handleConfirmDelete();
+                            }}
+                            className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                            disabled={isDeleting}
+                        >
+                            {isDeleting ? "Deleting..." : "Delete Video"}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </main>
     );
 }

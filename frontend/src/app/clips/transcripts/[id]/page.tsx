@@ -12,7 +12,35 @@ import CaptionGenerator from '@/components/CaptionGenerator';
 import BulkEditModal from '@/components/BulkEditModal';
 import { AlertCircle, CheckSquare, Download, Eye, ExternalLink, Flame, Loader2, RefreshCcw, Save, Square, StopCircle, Trash2, Wand2 } from 'lucide-react';
 import StreamerGameplayCrop from '@/components/StreamerGameplayCrop';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
+
+function getApiErrorData(error: unknown) {
+    return axios.isAxiosError<{ error?: string; details?: string }>(error)
+        ? error.response?.data
+        : undefined;
+}
+
+function getApiErrorMessage(error: unknown, fallback: string, preferDetails = false) {
+    const data = getApiErrorData(error);
+    return preferDetails
+        ? data?.details || data?.error || fallback
+        : data?.error || data?.details || fallback;
+}
+
+function getApiErrorDetails(error: unknown) {
+    return getApiErrorData(error)?.details;
+}
+
 interface TranscriptSegment {
     start: string;
     end: string;
@@ -130,6 +158,7 @@ export default function TranscriptDetailPage() {
     const [captionModalClipIndexes, setCaptionModalClipIndexes] = useState<number[]>([]);
     const [sortOrder, setSortOrder] = useState<'virality' | 'order' | 'duration'>('virality');
     const [previewVideo, setPreviewVideo] = useState<{ clipIndex: number; video: ClipVideo } | null>(null);
+    const [confirmDeleteVersion, setConfirmDeleteVersion] = useState<{ clipIndex: number; video: ClipVideo } | null>(null);
     const params = useParams();
     const router = useRouter();
     const id = params.id;
@@ -258,9 +287,10 @@ export default function TranscriptDetailPage() {
                 clipIndex: clipIndex
             });
             await fetchTranscript();
-        } catch (err: any) {
-            const errorMessage = err.response?.data?.error || `Failed to generate clip ${clipIndex + 1}. Please try again.`;
-            const errorDetails = err.response?.data?.details ? ` (${err.response.data.details})` : '';
+        } catch (err: unknown) {
+            const errorMessage = getApiErrorMessage(err, `Failed to generate clip ${clipIndex + 1}. Please try again.`);
+            const details = getApiErrorDetails(err);
+            const errorDetails = details ? ` (${details})` : '';
             setError(errorMessage + errorDetails);
             console.error('Clip generation error:', err);
         } finally {
@@ -284,9 +314,8 @@ export default function TranscriptDetailPage() {
                 clipIndexes
             });
             await fetchTranscript();
-        } catch (err: any) {
-            const errorMessage = err.response?.data?.details || err.response?.data?.error || 'Failed to generate remaining clips.';
-            setError(errorMessage);
+        } catch (err: unknown) {
+            setError(getApiErrorMessage(err, 'Failed to generate remaining clips.', true));
         }
     };
 
@@ -301,8 +330,8 @@ export default function TranscriptDetailPage() {
                 setTranscript(response.data.transcript);
             }
             setNotice('Processing was cancelled.');
-        } catch (err: any) {
-            setError(err.response?.data?.error || 'Failed to cancel transcript processing.');
+        } catch (err: unknown) {
+            setError(getApiErrorMessage(err, 'Failed to cancel transcript processing.'));
         } finally {
             setCancellingTranscript(false);
         }
@@ -317,8 +346,8 @@ export default function TranscriptDetailPage() {
             if (response.data?.transcript) {
                 setTranscript(response.data.transcript);
             }
-        } catch (err: any) {
-            setError(err.response?.data?.error || 'Failed to cancel clip generation.');
+        } catch (err: unknown) {
+            setError(getApiErrorMessage(err, 'Failed to cancel clip generation.'));
         } finally {
             setCancellingClips(prev => ({ ...prev, [clipIndex]: false }));
         }
@@ -386,9 +415,10 @@ export default function TranscriptDetailPage() {
             });
             setTranscript(prev => prev ? { ...prev, clips: response.data.clips || prev.clips } : prev);
             setGeneratedClips(response.data.generatedClips || {});
-        } catch (err: any) {
-            const errorMessage = err.response?.data?.error || 'Failed to save clip hook.';
-            const errorDetails = err.response?.data?.details ? ` (${err.response.data.details})` : '';
+        } catch (err: unknown) {
+            const errorMessage = getApiErrorMessage(err, 'Failed to save clip hook.');
+            const details = getApiErrorDetails(err);
+            const errorDetails = details ? ` (${details})` : '';
             setError(errorMessage + errorDetails);
             console.error('Clip hook save error:', err);
         } finally {
@@ -406,9 +436,10 @@ export default function TranscriptDetailPage() {
             const response = await axios.post(`${API_URL}/clips/clips/${transcript._id}/${clipIndex}/hook/regenerate`);
             setTranscript(prev => prev ? { ...prev, clips: response.data.clips || prev.clips } : prev);
             setGeneratedClips(response.data.generatedClips || {});
-        } catch (err: any) {
-            const errorMessage = err.response?.data?.error || 'Failed to regenerate clip hook.';
-            const errorDetails = err.response?.data?.details ? ` (${err.response.data.details})` : '';
+        } catch (err: unknown) {
+            const errorMessage = getApiErrorMessage(err, 'Failed to regenerate clip hook.');
+            const details = getApiErrorDetails(err);
+            const errorDetails = details ? ` (${details})` : '';
             setError(errorMessage + errorDetails);
             console.error('Clip hook regeneration error:', err);
         } finally {
@@ -416,11 +447,14 @@ export default function TranscriptDetailPage() {
         }
     };
 
-    const deleteClipVersion = async (clipIndex: number, video: ClipVideo) => {
-        if (!transcript) return;
-        const confirmed = confirm('Delete this clip version? The video file will also be removed.');
-        if (!confirmed) return;
+    const deleteClipVersion = (clipIndex: number, video: ClipVideo) => {
+        setConfirmDeleteVersion({ clipIndex, video });
+    };
 
+    const handleConfirmDeleteVersion = async () => {
+        if (!transcript || !confirmDeleteVersion) return;
+        const { clipIndex, video } = confirmDeleteVersion;
+        
         const deletionKey = `${clipIndex}:${video.id}`;
         setDeletingVersions(prev => ({ ...prev, [deletionKey]: true }));
         setError('');
@@ -428,9 +462,11 @@ export default function TranscriptDetailPage() {
         try {
             await axios.delete(`${API_URL}/clips/clips/${transcript._id}/${clipIndex}/videos/${encodeURIComponent(video.id)}`);
             await fetchTranscript();
-        } catch (err: any) {
-            const errorMessage = err.response?.data?.error || 'Failed to delete clip version.';
-            const errorDetails = err.response?.data?.details ? ` (${err.response.data.details})` : '';
+            setConfirmDeleteVersion(null);
+        } catch (err: unknown) {
+            const errorMessage = getApiErrorMessage(err, 'Failed to delete clip version.');
+            const details = getApiErrorDetails(err);
+            const errorDetails = details ? ` (${details})` : '';
             setError(errorMessage + errorDetails);
             console.error('Clip version deletion error:', err);
         } finally {
@@ -480,8 +516,8 @@ export default function TranscriptDetailPage() {
             a.download = `${transcript.originalFilename}_clips.zip`;
             a.click();
             URL.revokeObjectURL(url);
-        } catch (err: any) {
-            setError(err.response?.data?.error || 'Failed to download clips.');
+        } catch (err: unknown) {
+            setError(getApiErrorMessage(err, 'Failed to download clips.'));
         } finally {
             setBulkDownloading(false);
         }
@@ -550,9 +586,8 @@ export default function TranscriptDetailPage() {
         try {
             await axios.post(`${API_URL}/clips/retry/${transcript._id}`);
             await fetchTranscript();
-        } catch (err: any) {
-            const errorMessage = err.response?.data?.details || err.response?.data?.error || 'Failed to retry transcription.';
-            setError(errorMessage);
+        } catch (err: unknown) {
+            setError(getApiErrorMessage(err, 'Failed to retry transcription.', true));
         } finally {
             setRetryingTranscript(false);
         }
@@ -1132,6 +1167,32 @@ export default function TranscriptDetailPage() {
                     onGenerationComplete={fetchTranscript}
                 />
             )}
+
+            <AlertDialog open={!!confirmDeleteVersion} onOpenChange={(open) => !open && setConfirmDeleteVersion(null)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Clip Version</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you sure you want to delete this clip version? The video file will also be removed. This action cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={confirmDeleteVersion ? deletingVersions[`${confirmDeleteVersion.clipIndex}:${confirmDeleteVersion.video.id}`] : false}>
+                            Cancel
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={(e) => {
+                                e.preventDefault();
+                                handleConfirmDeleteVersion();
+                            }}
+                            className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                            disabled={confirmDeleteVersion ? deletingVersions[`${confirmDeleteVersion.clipIndex}:${confirmDeleteVersion.video.id}`] : false}
+                        >
+                            {confirmDeleteVersion && deletingVersions[`${confirmDeleteVersion.clipIndex}:${confirmDeleteVersion.video.id}`] ? "Deleting..." : "Delete Version"}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </main>
     );
 } 
