@@ -73,6 +73,25 @@ function StyleGrid({ styles, value, onChange, disabled }: {
     onChange: (id: string) => void;
     disabled: boolean;
 }) {
+    const getCardPreviewTemplate = (style: CaptionStyle): CaptionStyle => ({
+        ...style,
+        alignment: 5,
+        outlineWidth: style.borderStyle === 3 ? style.outlineWidth : Math.max(style.outlineWidth ?? 0, 5),
+        scaleX: 1,
+        scaleY: 1,
+        spacing: 0,
+        layouts: {
+            ...style.layouts,
+            portrait: {
+                ...style.layouts.portrait,
+                fontSize: 96,
+                marginV: 0,
+                marginL: 0,
+                marginR: 0,
+            },
+        },
+    });
+
     if (styles.length === 0) {
         return (
             <div className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
@@ -93,10 +112,10 @@ function StyleGrid({ styles, value, onChange, disabled }: {
                     }`}
                 >
                     <CaptionTemplatePreview
-                        template={s}
+                        template={getCardPreviewTemplate(s)}
                         aspect="portrait"
                         text="SAMPLE"
-                        style={{ height: 72, width: '100%', borderRadius: 6 }}
+                        style={{ height: 86, width: '100%', borderRadius: 6 }}
                     />
                     <span className="text-xs font-medium truncate w-full text-center">{s.name}</span>
                 </button>
