@@ -5,11 +5,12 @@ RUN apk add --no-cache \
     ffmpeg \
     fontconfig \
     python3 \
+    py3-pip \
     ttf-dejavu \
-    yt-dlp \
     make \
     g++ \
-    curl
+    curl && \
+    pip3 install --break-system-packages yt-dlp yt-dlp-get-pot
 
 RUN mkdir -p /usr/share/fonts/truetype/google && \
     curl -fL --retry 3 -o /usr/share/fonts/truetype/google/Montserrat.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf" && \
