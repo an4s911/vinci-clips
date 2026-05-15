@@ -506,7 +506,7 @@ export default function UploadClient() {
                             {cancellingIds[transcript._id] || transcript.processingJob?.status === 'cancelling' ? 'Stopping...' : 'Stop Processing'}
                           </Button>
                         )}
-                        {transcript.status === 'failed' && (
+                        {transcript.status === 'failed' && transcript.mp3Url && (
                           <Button
                             onClick={(e) => handleRetryTranscription(transcript._id, e)}
                             variant="outline"
