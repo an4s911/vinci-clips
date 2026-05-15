@@ -58,7 +58,7 @@ const validateUrl = (url) => {
 };
 
 function getYtDlpArgs(args) {
-    const finalArgs = [...args];
+    const finalArgs = ['--js-runtimes', 'node', ...args];
     const cookiesPath = process.env.YTDLP_COOKIES_PATH;
     const userAgent = process.env.YTDLP_USER_AGENT;
     const extractorArgs = process.env.YTDLP_EXTRACTOR_ARGS;
