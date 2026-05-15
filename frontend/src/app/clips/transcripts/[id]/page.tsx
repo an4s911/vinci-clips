@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useParams, useRouter } from 'next/navigation';
-import ReframeModal from '@/components/ReframeModal';
+import SmartCropModal from '@/components/SmartCropModal';
 import CaptionGenerator from '@/components/CaptionGenerator';
 import BulkEditModal from '@/components/BulkEditModal';
 import { AlertCircle, CheckSquare, Download, Eye, ExternalLink, Flame, Loader2, RefreshCcw, Save, Square, StopCircle, Trash2, Wand2 } from 'lucide-react';
@@ -45,6 +45,11 @@ interface ClipVideo {
     }> | null;
     title?: string;
 }
+
+type SmartCropClipSelection = ClipVideo & {
+    clipIndex: number;
+    clipDefinition?: Clip;
+};
 
 interface ProcessingJob {
     status: 'idle' | 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
@@ -110,12 +115,12 @@ export default function TranscriptDetailPage() {
     const [notice, setNotice] = useState('');
     const [analyzing, setAnalyzing] = useState(false);
     const [generatingClips, setGeneratingClips] = useState<{[key: number]: boolean}>({});
-    const [generatedClips, setGeneratedClips] = useState<{[key: number]: any}>({});
+    const [generatedClips, setGeneratedClips] = useState<NonNullable<Transcript['generatedClips']>>({});
     const [deletingVersions, setDeletingVersions] = useState<{[key: string]: boolean}>({});
     const [savingHooks, setSavingHooks] = useState<{[key: number]: boolean}>({});
     const [regeneratingHooks, setRegeneratingHooks] = useState<{[key: number]: boolean}>({});
-    const [isReframeModalOpen, setIsReframeModalOpen] = useState(false);
-    const [selectedClipForReframe, setSelectedClipForReframe] = useState<any>(null);
+    const [isSmartCropModalOpen, setIsSmartCropModalOpen] = useState(false);
+    const [selectedClipForSmartCrop, setSelectedClipForSmartCrop] = useState<SmartCropClipSelection | null>(null);
     const [retryingTranscript, setRetryingTranscript] = useState(false);
     const [cancellingTranscript, setCancellingTranscript] = useState(false);
     const [cancellingClips, setCancellingClips] = useState<{[key: number]: boolean}>({});
@@ -336,16 +341,15 @@ export default function TranscriptDetailPage() {
         }
     };
 
-    const openReframeModal = (video: ClipVideo, clipIndex: number) => {
+    const openSmartCropModal = (video: ClipVideo, clipIndex: number) => {
         // Pass the generated clip directly - it already contains the final video URL
-        setSelectedClipForReframe({
+        setSelectedClipForSmartCrop({
             ...video,
             clipIndex,
             clipDefinition: transcript?.clips?.[clipIndex],
-            clipTimeline: video.clipTimeline,
-            clipHook: transcript?.clips?.[clipIndex]?.hook
+            clipTimeline: video.clipTimeline
         });
-        setIsReframeModalOpen(true);
+        setIsSmartCropModalOpen(true);
     };
 
     const updateClipHookDraft = (clipIndex: number, updates: Partial<ClipHook>) => {
@@ -434,9 +438,9 @@ export default function TranscriptDetailPage() {
         }
     };
 
-    const closeReframeModal = () => {
-        setIsReframeModalOpen(false);
-        setSelectedClipForReframe(null);
+    const closeSmartCropModal = () => {
+        setIsSmartCropModalOpen(false);
+        setSelectedClipForSmartCrop(null);
     };
 
     const toggleClipSelect = (index: number) => {
@@ -855,7 +859,9 @@ export default function TranscriptDetailPage() {
                                                                 Edit
                                                             </Button>
                                                             <Button size="sm" variant="outline" className="h-7 px-2 text-xs shrink-0"
-                                                                onClick={() => openReframeModal(primaryVideo, index)}
+                                                                onClick={() => openSmartCropModal(primaryVideo, index)}
+                                                                aria-label="Smart Crop"
+                                                                title="Smart Crop"
                                                             >
                                                                 <Wand2 className="h-3 w-3" />
                                                             </Button>
@@ -940,8 +946,15 @@ export default function TranscriptDetailPage() {
                                                                         <Button size="sm" variant="outline" className="h-6 px-2 text-xs shrink-0" onClick={() => openPreviewModal(index, version)}>
                                                                             <Eye className="mr-1 h-3 w-3" />Preview
                                                                         </Button>
-                                                                        <Button size="sm" variant="outline" className="h-6 px-2 text-xs shrink-0" onClick={() => openReframeModal(version, index)}>
-                                                                            <Wand2 className="mr-1 h-3 w-3" />Reframe
+                                                                        <Button
+                                                                            size="sm"
+                                                                            variant="outline"
+                                                                            className="h-6 px-2 text-xs shrink-0"
+                                                                            onClick={() => openSmartCropModal(version, index)}
+                                                                            aria-label="Smart Crop"
+                                                                            title="Smart Crop"
+                                                                        >
+                                                                            <Wand2 className="h-3 w-3" />
                                                                         </Button>
                                                                         <span className="inline-flex shrink-0 items-center gap-1">
                                                                             <Button asChild size="sm" variant="outline" className="h-6 px-2 text-xs">
@@ -992,7 +1005,7 @@ export default function TranscriptDetailPage() {
                     transcriptId={transcript._id}
                     clipIndexes={captionModalClipIndexes}
                     generatedClips={generatedClips}
-                    clips={transcript.clips as any}
+                    clips={transcript.clips}
                     onComplete={fetchTranscript}
                 />
             )}
@@ -1062,11 +1075,11 @@ export default function TranscriptDetailPage() {
                                         onClick={() => {
                                             const { clipIndex, video } = previewVideo;
                                             closePreviewModal();
-                                            openReframeModal(video, clipIndex);
+                                            openSmartCropModal(video, clipIndex);
                                         }}
                                     >
                                         <Wand2 className="mr-2 h-4 w-4" />
-                                        Reframe
+                                        Smart Crop
                                     </Button>
                                     <Button asChild size="sm" variant="outline">
                                         <a href={`${API_URL}${previewVideo.video.url}`} download={previewVideo.video.filename}>
@@ -1104,20 +1117,18 @@ export default function TranscriptDetailPage() {
                 </Dialog>
             )}
 
-            {/* Reframe Modal */}
-            {transcript && selectedClipForReframe && (
-                <ReframeModal
-                    isOpen={isReframeModalOpen}
-                    onClose={closeReframeModal}
+            {/* Smart Crop Modal */}
+            {transcript && selectedClipForSmartCrop && (
+                <SmartCropModal
+                    isOpen={isSmartCropModalOpen}
+                    onClose={closeSmartCropModal}
                     transcriptId={transcript._id}
-                    videoUrl={selectedClipForReframe.url} 
-                    originalFilename={selectedClipForReframe.filename || transcript.originalFilename}
-                    generatedClipUrl={selectedClipForReframe.url}
-                    sourceVideoId={selectedClipForReframe.id}
-                    clipDefinition={selectedClipForReframe.clipDefinition}
-                    clipTimeline={selectedClipForReframe.clipTimeline}
-                    clipHook={selectedClipForReframe.clipHook}
-                    clipIndex={selectedClipForReframe.clipIndex}
+                    videoUrl={selectedClipForSmartCrop.url}
+                    generatedClipUrl={selectedClipForSmartCrop.url}
+                    sourceVideoId={selectedClipForSmartCrop.id}
+                    clipDefinition={selectedClipForSmartCrop.clipDefinition}
+                    clipTimeline={selectedClipForSmartCrop.clipTimeline}
+                    clipIndex={selectedClipForSmartCrop.clipIndex}
                     onGenerationComplete={fetchTranscript}
                 />
             )}
