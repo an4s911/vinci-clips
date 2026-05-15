@@ -12,7 +12,7 @@ WORKDIR /app
 ENV NODE_ENV development
 ENV NEXT_TELEMETRY_DISABLED 1
 EXPOSE 3000
-CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
+CMD ["sh", "-c", "npm install && npm run dev -- --hostname 0.0.0.0"]
 
 FROM base AS builder
 WORKDIR /app
