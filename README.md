@@ -230,34 +230,24 @@ Important: `NEXT_PUBLIC_API_URL` is baked into Next.js production builds. Rebuil
 
 YouTube imports use `yt-dlp` in the backend container. Local imports work without
 extra configuration, but VPS and datacenter IPs are challenged by YouTube's bot
-detection. The production Docker stack includes a `pot-provider` sidecar that
-generates Proof-of-Origin tokens to bypass this — no account or cookies required.
+detection. For production deployments, use an account dedicated to this service
+and provide exported cookies to `yt-dlp`.
 
-### POT Provider (recommended for VPS)
+### Cookie-based YouTube imports
 
-The `pot-provider` service is already defined in `docker-compose.prod.yml`. Enable
-it by setting in your production env file:
-
-```env
-YTDLP_EXTRACTOR_ARGS=youtubepot-bgutilhttp:base_url=http://pot-provider:4416
-```
-
-The sidecar runs [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)
-and handles token generation automatically. The backend container includes the
-`yt-dlp-get-pot` plugin that connects yt-dlp to the provider.
-
-### Cookie-based fallback
-
-If you prefer not to run the sidecar, export Netscape-format YouTube cookies from
-a browser, place the file under `backend/storage/` on the host (mounted at
-`/app/storage` in the container), and set:
+Export Netscape-format YouTube cookies from a browser, place the file under
+`backend/storage/` on the host (mounted at `/app/storage` in the container), and
+set:
 
 ```env
 YTDLP_COOKIES_PATH=/app/storage/yt-dlp-cookies.txt
 YTDLP_USER_AGENT=
 ```
 
-Note: cookies expire approximately every two weeks and need periodic refresh.
+Note: cookies are session credentials. Use a dedicated account, restrict access
+to the cookie file, and expect to refresh it when Google expires the session or
+requires account verification. YouTube URL imports should still be treated as a
+best-effort source; direct file upload remains the stable ingestion path.
 
 ### Error handling
 

@@ -61,7 +61,6 @@ function getYtDlpArgs(args) {
     const finalArgs = ['--js-runtimes', 'node', ...args];
     const cookiesPath = process.env.YTDLP_COOKIES_PATH;
     const userAgent = process.env.YTDLP_USER_AGENT;
-    const extractorArgs = process.env.YTDLP_EXTRACTOR_ARGS;
 
     if (cookiesPath) {
         finalArgs.unshift('--cookies', cookiesPath);
@@ -69,10 +68,6 @@ function getYtDlpArgs(args) {
 
     if (userAgent) {
         finalArgs.unshift('--user-agent', userAgent);
-    }
-
-    if (extractorArgs) {
-        finalArgs.unshift('--extractor-args', extractorArgs);
     }
 
     return finalArgs;

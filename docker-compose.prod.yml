@@ -53,20 +53,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  pot-provider:
-    image: brainicism/bgutil-ytdlp-pot-provider:latest
-    container_name: vinci-clips-pot-provider
-    restart: always
-    networks:
-      - vinci-network
-    mem_limit: 512m
-    cpus: "0.5"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   backend:
     build:
       context: ./backend
@@ -95,7 +81,6 @@ services:
       MEDIA_ADMIN_TOKEN: ${MEDIA_ADMIN_TOKEN:-}
       YTDLP_COOKIES_PATH: ${YTDLP_COOKIES_PATH:-}
       YTDLP_USER_AGENT: ${YTDLP_USER_AGENT:-}
-      YTDLP_EXTRACTOR_ARGS: ${YTDLP_EXTRACTOR_ARGS:-}
     expose:
       - "8080"
     ports:
@@ -111,8 +96,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      pot-provider:
-        condition: service_started
     networks:
       - vinci-network
     mem_limit: 10g

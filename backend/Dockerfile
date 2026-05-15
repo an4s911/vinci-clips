@@ -10,7 +10,7 @@ RUN apk add --no-cache \
     make \
     g++ \
     curl && \
-    pip3 install --break-system-packages yt-dlp yt-dlp-get-pot bgutil-ytdlp-pot-provider
+    pip3 install --break-system-packages yt-dlp
 
 RUN mkdir -p /usr/share/fonts/truetype/google && \
     curl -fL --retry 3 -o /usr/share/fonts/truetype/google/Montserrat.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf" && \
