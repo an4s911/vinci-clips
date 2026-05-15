@@ -226,6 +226,26 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml exec backend npm 
 
 Important: `NEXT_PUBLIC_API_URL` is baked into Next.js production builds. Rebuild the frontend Docker image after changing it.
 
+For production Docker deployments, set `HOST_UID` and `HOST_GID` in `.env.prod`
+to the deploy user's IDs so bind-mounted backend media directories stay writable
+from the host:
+
+```bash
+id -u
+id -g
+```
+
+Example:
+
+```env
+HOST_UID=1000
+HOST_GID=1000
+```
+
+The production compose stack runs the backend as this UID/GID, so files created under `backend/uploads`,
+`backend/storage`, `backend/temp`, `backend/cache`, and `backend/logs` are owned
+by the deploy user on the host.
+
 ## YouTube URL Imports
 
 YouTube imports use `yt-dlp` in the backend container. Local imports work without

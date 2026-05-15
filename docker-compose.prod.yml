@@ -59,9 +59,11 @@ services:
       dockerfile: Dockerfile
     container_name: vinci-clips-backend-prod
     restart: always
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     environment:
       PORT: 8080
       NODE_ENV: production
+      HOME: /tmp
       DATABASE_URL: postgresql://${POSTGRES_USER:-vinci}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-vinci_clips}?schema=public
       SESSION_SECRET: ${SESSION_SECRET}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
