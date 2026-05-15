@@ -4,12 +4,12 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleAIFileManager } = require('@google/generative-ai/server');
 const { generateJsonContent, getModelCandidates } = require('./gemini');
 const {
-    buildTranscriptionPrompt,
     TRANSCRIPTION_SCHEMA,
     assertTranscriptNotCancelled,
     logVideoProcessing,
     runTrackedCommand,
 } = require('./backgroundJobs');
+const { getActivePromptBody } = require('./promptStore');
 
 const DEFAULT_CHUNK_DURATION_SEC = 300;
 const DEFAULT_CHUNK_OVERLAP_SEC = 30;
@@ -192,7 +192,7 @@ async function transcribeChunk({ genAI, fileManager, chunkPath, transcriptId, lo
         contents: [{
             role: 'user',
             parts: [
-                { text: buildTranscriptionPrompt() },
+                { text: await getActivePromptBody('transcription') },
                 audioPart,
             ],
         }],

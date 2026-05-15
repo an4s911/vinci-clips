@@ -4,11 +4,12 @@ import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { 
-  ShieldAlert, 
-  Palette, 
+import {
+  ShieldAlert,
+  Palette,
   Settings as SettingsIcon,
-  ChevronRight
+  ChevronRight,
+  Sparkles
 } from "lucide-react";
 
 const sidebarItems = [
@@ -23,6 +24,12 @@ const sidebarItems = [
     href: "/clips/settings/caption-templates",
     icon: Palette,
     description: "Design caption styles and templates"
+  },
+  {
+    title: "AI Prompts",
+    href: "/clips/settings/prompts",
+    icon: Sparkles,
+    description: "Customize AI prompts"
   },
 ];
 

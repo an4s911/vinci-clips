@@ -14,6 +14,7 @@ const reframeRoutes = require('./reframe');
 const streamerRoutes = require('./streamer');
 const storageRoutes = require('./storage');
 const settingsRoutes = require('./settings');
+const promptsRoutes = require('./prompts');
 
 router.use('/upload', uploadRoutes);
 router.use('/import', importRoutes);
@@ -27,6 +28,7 @@ router.use('/streamer', streamerRoutes);
 router.use('/retry', retryRoutes);
 router.use('/storage', storageRoutes);
 router.use('/settings', settingsRoutes);
+router.use('/prompts', promptsRoutes);
 router.use('/admin', fixStatusRoutes);
 
 module.exports = router;

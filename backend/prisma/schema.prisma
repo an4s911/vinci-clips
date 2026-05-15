@@ -51,6 +51,18 @@ model BlockedWord {
   updatedAt DateTime @updatedAt
 }
 
+model PromptTemplate {
+  id        String   @id @default(cuid())
+  kind      String   // 'transcription' | 'clipAnalysis' | 'hookRegen'
+  name      String
+  body      String   @db.Text
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([kind, isActive])
+}
+
 model CaptionTemplate {
   id          String   @id @default(cuid())
   name        String

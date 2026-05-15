@@ -13,6 +13,7 @@ const {
     normalizeTranscriptClips
 } = require('../utils/clipVideos');
 const { getCoveredTranscriptText } = require('../utils/clipModeration');
+const { getActivePromptBody, renderPrompt } = require('../utils/promptStore');
 const { generateSingleClipInBackground } = require('../utils/clipGeneration');
 const {
     createJobState,
@@ -439,33 +440,12 @@ router.post('/:transcriptId/:clipIndex/hook/regenerate', async (req, res) => {
 
         const currentHookText = typeof clip.hook?.text === 'string' ? clip.hook.text.trim() : '';
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const prompt = `Create one new short creator overlay hook for this video clip.
-
-Rules:
-- Return a hook only, not a title or explanation.
-- 3-10 words.
-- Write it like YouTube Shorts/TikTok top-overlay setup text, not a polished title.
-- Make viewers want to see what happens next, not understand the whole clip.
-- Use casual, punchy, creator-style phrasing.
-- Prefer setup lines, cliffhangers, reaction teases, bold claims, or occasional questions.
-- Questions are allowed, but most hooks should be statements unless the clip naturally fits a question.
-- Avoid generic summaries like "A funny moment from the video" or "Discussion about gaming strategy".
-- Do not use title case unless it naturally fits the phrase.
-- Good hook examples:
-  - "look what this guy did:"
-  - "he instantly regretted this"
-  - "this should not have worked"
-  - "wait for his reaction"
-  - "then everything changed"
-  - "a $5 mouse can do this?"
-  - "bro thought he had it"
-  - "this got awkward fast"
-  - "nobody expected that ending"
-  - "he said it too early"
-- Avoid reusing this current hook: "${currentHookText || 'none'}"
-
-Clip title: ${clip.title || 'Untitled clip'}
-Clip transcript: ${coveredText}`;
+        const hookBody = await getActivePromptBody('hookRegen');
+        const prompt = renderPrompt(hookBody, {
+            currentHookText: currentHookText || 'none',
+            clipTitle: clip.title || 'Untitled clip',
+            clipTranscript: coveredText,
+        });
 
         const { data, model: resolvedModel } = await generateJsonContent({
             genAI,

@@ -11,6 +11,7 @@ const {
     moderateClipLanguage,
     parseTimestampToSeconds
 } = require('./clipModeration');
+const { getActivePromptBody, renderPrompt } = require('./promptStore');
 
 const MIN_CLIP_DURATION_SEC = 15;
 const MAX_CLIP_DURATION_SEC = 75;
@@ -172,7 +173,7 @@ function estimateCandidateCount(durationSec) {
     return 24;
 }
 
-function buildClipAnalysisPrompt({ transcriptDoc, transcriptChunks, candidateCount }) {
+async function buildClipAnalysisPrompt({ transcriptDoc, transcriptChunks, candidateCount }) {
     const durationText = Number.isFinite(transcriptDoc.duration)
         ? `${formatSeconds(transcriptDoc.duration)} seconds`
         : 'unknown duration';
@@ -184,50 +185,14 @@ function buildClipAnalysisPrompt({ transcriptDoc, transcriptChunks, candidateCou
         ].join(' | '))
         .join('\n');
 
-    return `You are a viral short-form content strategist identifying the strongest clips from a timestamped transcript for TikTok, YouTube Shorts, and Instagram Reels.
-
-## Your Goal
-Find the top ${candidateCount} moments that will perform best as standalone clips. Think like a creator with 10M followers: you are looking for moments that stop the scroll, create an emotional reaction, and leave viewers wanting more.
-
-## Virality Scoring Rubric
-Score each clip 0-100 by summing these weighted sub-scores:
-
-1. **Hook Strength (0-30)**: Does the opening line immediately grab attention? Does the clip start mid-action or with a provocative statement? High score = viewer cannot scroll past without watching.
-2. **Payoff/Punchline (0-25)**: Is there a satisfying conclusion, surprise twist, or laugh? Does it deliver on the implicit promise of the opening?
-3. **Emotional Spike (0-15)**: Does it trigger laughter, shock, inspiration, cringe, awe, or anger? Neutral moments score 0.
-4. **Novelty/Insight (0-15)**: Does it teach something surprising, challenge a common belief, or offer a counterintuitive take? Generic advice scores 0.
-5. **Standalone Clarity (0-15)**: Can someone who has never seen the original video fully understand this clip without context? Full context = 15, requires prior knowledge = 0.
-
-Sum sub-scores to get viralityScore.
-
-## Clip Selection Rules
-- Use ONLY timestamps from the provided chunks. Never invent timestamps.
-- Prefer continuous clips (startSec/endSec). Use multi-segment clips ONLY when cutting dead air between two tightly related moments.
-- Each clip must be ${MIN_CLIP_DURATION_SEC}-${MAX_CLIP_DURATION_SEC} seconds total.
-- Start slightly before the setup moment, end after the payoff lands.
-- Reject: vague context, lengthy intros/outros, dead air >3 seconds, repeated filler.
-- Each clip must be self-contained — if the clip requires the viewer to know who/what is being referenced, expand the start to include that context or skip the clip.
-- No two clips should cover the same story beat (aggressive deduplication — prefer diversity of topics).
-
-## Hook Text Rules
-Write a 3-10 word top-overlay hook that will be displayed on screen. This is the MOST important element:
-- Use curiosity gaps ("The thing nobody tells you about X")
-- Use contrarian takes ("Everyone's wrong about X")
-- Use pattern interrupts ("Wait, WHAT?")
-- Use specific numbers or stakes ("Lost $50k because of this")
-- NEVER write: "In this clip...", "Watch as...", "This video shows...", "Here's how..."
-- The hook must match the tone and content of the specific moment, not the overall video.
-
-## Tags
-Assign 1-4 tags from: funny, insight, controversy, story, advice, mistake, reaction, debate, achievement, warning
-
-## Output
-Return JSON array sorted by viralityScore descending. For continuous clips use startSec+endSec. For multi-segment use segments[].
-
-Video duration: ${durationText}
-
-Timestamped transcript chunks:
-${chunkText}`;
+    const body = await getActivePromptBody('clipAnalysis');
+    return renderPrompt(body, {
+        candidateCount,
+        minDuration: MIN_CLIP_DURATION_SEC,
+        maxDuration: MAX_CLIP_DURATION_SEC,
+        durationText,
+        chunkText,
+    });
 }
 
 function normalizeScore(value) {
@@ -336,7 +301,7 @@ async function analyzeTranscriptForClips(transcriptDoc, options = {}) {
 
     const candidateCount = options.candidateCount || estimateCandidateCount(transcriptDoc.duration);
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const prompt = buildClipAnalysisPrompt({ transcriptDoc, transcriptChunks, candidateCount });
+    const prompt = await buildClipAnalysisPrompt({ transcriptDoc, transcriptChunks, candidateCount });
     const blockedTerms = await loadBlockedWordTerms();
 
     const { data: suggestions, model: resolvedModel } = await generateJsonContent({
