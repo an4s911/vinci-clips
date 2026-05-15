@@ -252,6 +252,38 @@ function buildStaticCropFilter(cropParameters) {
     return `crop=${cropParameters.width}:${cropParameters.height}:${cropParameters.x}:${cropParameters.y}`;
 }
 
+function buildBlurredComplexFilter() {
+    return [
+        '[0:v]split=2[fgsrc][bgsrc]',
+        '[bgsrc]crop=trunc(ih*9/16/2)*2:ih,scale=270:480,gblur=sigma=20,scale=1080:1920,setsar=1[bg]',
+        '[fgsrc]scale=1080:-2,setsar=1[fg]',
+        '[bg][fg]overlay=x=0:y=(H-h)/2[out]'
+    ].join(';');
+}
+
+async function runBlurredComposition(inputPath, outputPath) {
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    const complexGraph = buildBlurredComplexFilter();
+    return new Promise((resolve, reject) => {
+        ffmpeg(inputPath)
+            .outputOptions([
+                '-filter_complex', complexGraph,
+                '-map', '[out]',
+                '-map', '0:a?',
+                '-c:v', 'libx264',
+                '-crf', '23',
+                '-preset', 'medium',
+                '-c:a', 'aac',
+                '-b:a', '128k'
+            ])
+            .output(outputPath)
+            .on('progress', (progress) => logger.info(`Blurred composition: ${progress.percent}% done`))
+            .on('end', resolve)
+            .on('error', reject)
+            .run();
+    });
+}
+
 function getAssetKey(transcript, generatedClipUrl) {
     return generatedClipUrl || transcript.videoUrl;
 }
@@ -284,7 +316,7 @@ async function persistAssetState(transcript, generatedClipUrl, updater) {
 // --- Express Routes ---
 router.post('/generate', async (req, res) => {
     try {
-        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, hook, hookStyleId, clipDefinition, clipTimeline, clipIndex, processingMode, sourceVideoId } = req.body;
+        const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, hook, hookStyleId, clipDefinition, clipTimeline, clipIndex, processingMode, sourceVideoId, reframeStyleId = 'fullscreen' } = req.body;
         const captionsOnly = processingMode === 'captions-only';
         const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
         const normalizedHook = {
@@ -313,6 +345,9 @@ router.post('/generate', async (req, res) => {
         
         const targetRatio = ASPECT_RATIOS[targetPlatform];
         if (!targetRatio) return res.status(400).json({ error: 'Invalid target platform' });
+        if (reframeStyleId === 'blurred' && targetPlatform !== 'tiktok') {
+            return res.status(400).json({ error: 'Blurred style is only available for TikTok/Shorts (9:16)' });
+        }
 
         const parsedClipIndex = Number.isInteger(clipIndex) ? clipIndex : Number.parseInt(clipIndex, 10);
         const shouldAttachToClip = generatedClipUrl || Number.isInteger(parsedClipIndex);
@@ -346,50 +381,82 @@ router.post('/generate', async (req, res) => {
                 });
             });
 
-            const { assetState } = getAssetState(transcript, generatedClipUrl);
-            const resolvedDetections = Array.isArray(detections) && detections.length > 0
-                ? detections
-                : (assetState.detections || []);
-            const resolvedCropParameters = cropParameters
-                || assetState.analyses?.[targetPlatform]?.cropParameters
-                || calculateCenterCrop(videoDimensions, targetRatio);
-            const cropFilter = resolvedDetections.length > 0
-                ? generateVisualDirectorFilter(resolvedDetections, videoDimensions, targetRatio)
-                : buildStaticCropFilter(resolvedCropParameters);
+            const videoAspect = videoDimensions.width / videoDimensions.height;
+            const isBlurred = reframeStyleId === 'blurred' && videoAspect > (9 / 16 + 0.01);
+
+            let cropFilter = null;
+            let resolvedCropParameters = null;
+            if (!isBlurred) {
+                const { assetState } = getAssetState(transcript, generatedClipUrl);
+                const resolvedDetections = Array.isArray(detections) && detections.length > 0
+                    ? detections
+                    : (assetState.detections || []);
+                resolvedCropParameters = cropParameters
+                    || assetState.analyses?.[targetPlatform]?.cropParameters
+                    || calculateCenterCrop(videoDimensions, targetRatio);
+                cropFilter = resolvedDetections.length > 0
+                    ? generateVisualDirectorFilter(resolvedDetections, videoDimensions, targetRatio)
+                    : buildStaticCropFilter(resolvedCropParameters);
+            }
 
             if (hasOverlay) {
-                // Single-pass: crop + caption/hook burn in one ffmpeg run to avoid A/V drift from double re-encode.
-                const croppedDimensions = {
-                    width: resolvedCropParameters.width,
-                    height: resolvedCropParameters.height,
-                };
                 const captionedOutputPath = path.join('uploads', 'temp', `captioned_${sanitizedOutputName}`);
-                await renderCaptionedVideo({
-                    inputPath: tempVideoPath,
-                    outputPath: captionedOutputPath,
-                    transcriptSegments: transcript.transcript,
-                    styleId: captions.style,
-                    hookStyleId: hookStyleId || (captions?.enabled ? captions.style : undefined),
-                    clipDefinition,
-                    clipTimeline,
-                    captionsEnabled: Boolean(captions?.enabled),
-                    hook: normalizedHook,
-                    logger,
-                    prependVideoFilters: [cropFilter],
-                    videoDimensions: croppedDimensions,
-                });
+                if (isBlurred) {
+                    // Two-pass: compose blurred frame, then burn captions onto result.
+                    const blurredTempPath = path.join('uploads', 'temp', `blur_${sanitizedOutputName}`);
+                    await runBlurredComposition(tempVideoPath, blurredTempPath);
+                    await renderCaptionedVideo({
+                        inputPath: blurredTempPath,
+                        outputPath: captionedOutputPath,
+                        transcriptSegments: transcript.transcript,
+                        styleId: captions.style,
+                        hookStyleId: hookStyleId || (captions?.enabled ? captions.style : undefined),
+                        clipDefinition,
+                        clipTimeline,
+                        captionsEnabled: Boolean(captions?.enabled),
+                        hook: normalizedHook,
+                        logger,
+                        prependVideoFilters: [],
+                        videoDimensions: { width: 1080, height: 1920 },
+                    });
+                    try { fs.unlinkSync(blurredTempPath); } catch {}
+                } else {
+                    // Single-pass: crop + caption/hook burn in one ffmpeg run to avoid A/V drift.
+                    const croppedDimensions = {
+                        width: resolvedCropParameters.width,
+                        height: resolvedCropParameters.height,
+                    };
+                    await renderCaptionedVideo({
+                        inputPath: tempVideoPath,
+                        outputPath: captionedOutputPath,
+                        transcriptSegments: transcript.transcript,
+                        styleId: captions.style,
+                        hookStyleId: hookStyleId || (captions?.enabled ? captions.style : undefined),
+                        clipDefinition,
+                        clipTimeline,
+                        captionsEnabled: Boolean(captions?.enabled),
+                        hook: normalizedHook,
+                        logger,
+                        prependVideoFilters: [cropFilter],
+                        videoDimensions: croppedDimensions,
+                    });
+                }
                 finalSourcePath = captionedOutputPath;
             } else {
-                await new Promise((resolve, reject) => {
-                    ffmpeg(tempVideoPath)
-                        .videoFilters(cropFilter)
-                        .outputOptions(['-c:v libx264', '-crf 23', '-preset medium', '-c:a aac', '-b:a 128k'])
-                        .output(outputPath)
-                        .on('progress', (progress) => logger.info(`Processing: ${progress.percent}% done`))
-                        .on('end', resolve)
-                        .on('error', reject)
-                        .run();
-                });
+                if (isBlurred) {
+                    await runBlurredComposition(tempVideoPath, outputPath);
+                } else {
+                    await new Promise((resolve, reject) => {
+                        ffmpeg(tempVideoPath)
+                            .videoFilters(cropFilter)
+                            .outputOptions(['-c:v libx264', '-crf 23', '-preset medium', '-c:a aac', '-b:a 128k'])
+                            .output(outputPath)
+                            .on('progress', (progress) => logger.info(`Processing: ${progress.percent}% done`))
+                            .on('end', resolve)
+                            .on('error', reject)
+                            .run();
+                    });
+                }
             }
         }
 

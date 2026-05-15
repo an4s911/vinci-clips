@@ -49,6 +49,11 @@ const PLATFORMS = [
     { id: 'youtube',   name: 'YouTube Wide',     aspectRatio: '16:9', icon: <Monitor     className="h-5 w-5" />, previewAspect: 'landscape' as CaptionPreviewAspect },
 ];
 
+const REFRAME_STYLES = [
+    { id: 'fullscreen', name: 'Fullscreen', preview: '/reframe-styles/fullscreen.svg' },
+    { id: 'blurred',    name: 'Blurred',    preview: '/reframe-styles/blurred.svg' },
+];
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function SectionHeader({ title, enabled, onToggle }: { title: string; enabled: boolean; onToggle: () => void }) {
@@ -64,6 +69,37 @@ function SectionHeader({ title, enabled, onToggle }: { title: string; enabled: b
                 {enabled ? 'On' : 'Off'}
             </span>
         </button>
+    );
+}
+
+function ReframeStylePicker({ value, onChange, disabled }: {
+    value: string;
+    onChange: (id: string) => void;
+    disabled: boolean;
+}) {
+    return (
+        <div className="flex gap-2 overflow-x-auto pb-2 pr-1">
+            {REFRAME_STYLES.map(s => (
+                <button
+                    key={s.id}
+                    onClick={() => onChange(s.id)}
+                    disabled={disabled}
+                    className={`flex w-28 flex-none flex-col items-center gap-1 rounded-lg border-2 p-1 transition-colors ${
+                        value === s.id ? 'border-primary bg-primary/5' : 'border-transparent hover:border-muted-foreground/30'
+                    }`}
+                >
+                    <div className="relative overflow-hidden rounded w-full" style={{ height: 86, background: '#0f172a' }}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                            src={s.preview}
+                            alt={s.name}
+                            className="w-full h-full object-contain"
+                        />
+                    </div>
+                    <span className="text-xs font-medium truncate w-full text-center">{s.name}</span>
+                </button>
+            ))}
+        </div>
     );
 }
 
@@ -189,8 +225,14 @@ export default function BulkEditModal({
     const [hookEnabled, setHookEnabled] = useState(true);
 
     const [platform, setPlatform] = useState('tiktok');
+    const [reframeStyleId, setReframeStyleId] = useState('fullscreen');
     const [captionStyleId, setCaptionStyleId] = useState('');
     const [hookStyleId, setHookStyleId] = useState('');
+
+    const handlePlatformChange = (id: string) => {
+        setPlatform(id);
+        if (id !== 'tiktok') setReframeStyleId('fullscreen');
+    };
 
     const [applying, setApplying] = useState(false);
     const [progressMsg, setProgressMsg] = useState('');
@@ -252,6 +294,7 @@ export default function BulkEditModal({
                         clipTimeline: primaryVideo.clipTimeline,
                         clipDefinition: clip,
                         targetPlatform: platform,
+                        reframeStyleId,
                         detections: [],
                         cropParameters: null,
                         captions: captionsEnabled ? { enabled: true, style: captionStyleId } : { enabled: false },
@@ -317,12 +360,11 @@ export default function BulkEditModal({
                                 <SectionHeader title="Reframe" enabled={reframeEnabled} onToggle={() => setReframeEnabled(v => !v)} />
                                 {reframeEnabled && (
                                     <div className="space-y-3 pl-1">
-                                        <p className="text-xs text-muted-foreground">Center crop is applied automatically for all clips.</p>
                                         <div className="grid grid-cols-3 gap-2">
                                             {PLATFORMS.map(p => (
                                                 <button
                                                     key={p.id}
-                                                    onClick={() => setPlatform(p.id)}
+                                                    onClick={() => handlePlatformChange(p.id)}
                                                     disabled={applying}
                                                     className={`flex flex-col items-center gap-2 rounded-lg border-2 py-3 px-2 text-xs font-medium transition-colors ${
                                                         platform === p.id ? 'border-primary bg-primary/5' : 'border-muted hover:border-muted-foreground/40'
@@ -334,6 +376,12 @@ export default function BulkEditModal({
                                                 </button>
                                             ))}
                                         </div>
+                                        {platform === 'tiktok' && (
+                                            <div className="space-y-1">
+                                                <p className="text-xs text-muted-foreground">Style</p>
+                                                <ReframeStylePicker value={reframeStyleId} onChange={setReframeStyleId} disabled={applying} />
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -376,6 +424,9 @@ export default function BulkEditModal({
                             <div className="text-xs text-muted-foreground text-center space-y-1 w-full">
                                 {reframeEnabled && (
                                     <div className="truncate">Reframe: <span className="font-medium">{selectedPlatform?.name}</span></div>
+                                )}
+                                {reframeEnabled && platform === 'tiktok' && (
+                                    <div className="truncate">Style: <span className="font-medium capitalize">{reframeStyleId}</span></div>
                                 )}
                                 {captionsEnabled && (
                                     <div className="truncate">Captions: <span className="font-medium">{selectedCaption?.name || '—'}</span></div>
