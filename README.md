@@ -228,20 +228,38 @@ Important: `NEXT_PUBLIC_API_URL` is baked into Next.js production builds. Rebuil
 
 ## YouTube URL Imports
 
-YouTube imports use `yt-dlp` in the backend container. Local imports may work
-without extra settings, but VPS and datacenter IPs are often challenged by
-YouTube. In that case, configure:
+YouTube imports use `yt-dlp` in the backend container. Local imports work without
+extra configuration, but VPS and datacenter IPs are challenged by YouTube's bot
+detection. The production Docker stack includes a `pot-provider` sidecar that
+generates Proof-of-Origin tokens to bypass this — no account or cookies required.
+
+### POT Provider (recommended for VPS)
+
+The `pot-provider` service is already defined in `docker-compose.prod.yml`. Enable
+it by setting in your production env file:
+
+```env
+YTDLP_EXTRACTOR_ARGS=youtubepot-bgutilhttp:base_url=http://pot-provider:4416
+```
+
+The sidecar runs [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)
+and handles token generation automatically. The backend container includes the
+`yt-dlp-get-pot` plugin that connects yt-dlp to the provider.
+
+### Cookie-based fallback
+
+If you prefer not to run the sidecar, export Netscape-format YouTube cookies from
+a browser, place the file under `backend/storage/` on the host (mounted at
+`/app/storage` in the container), and set:
 
 ```env
 YTDLP_COOKIES_PATH=/app/storage/yt-dlp-cookies.txt
 YTDLP_USER_AGENT=
 ```
 
-`YTDLP_COOKIES_PATH` must point to a Netscape-format cookies file inside the
-backend container. For Docker deployments, place that file under
-`backend/storage/` on the host because it is mounted at `/app/storage` in the
-container. `YTDLP_USER_AGENT` is optional and should match the browser/profile
-used to export the cookies when needed.
+Note: cookies expire approximately every two weeks and need periodic refresh.
+
+### Error handling
 
 Client-facing import and transcription failures are sanitized by the backend.
 The API returns `failureReason` and `processingJob.errorCode`; frontend pages
