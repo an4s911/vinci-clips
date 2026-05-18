@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from '@/components/ui/button';
@@ -199,7 +199,25 @@ export default function TranscriptDetailPage() {
         clip?.generation && ['queued', 'running', 'cancelling'].includes(clip.generation.status)
     );
 
-    const hasActiveJobs = Boolean(isTranscriptProcessing(transcript) || transcript?.clips?.some(isClipGenerating));
+    // True during the silent gap between transcribe-complete and analyze writing clips
+    const isAwaitingAnalysis =
+        transcript?.processingJob?.status === 'completed'
+        && (transcript?.transcript?.length ?? 0) > 0
+        && !transcript?.analysisMetadata?.analyzedAt
+        && !(transcript?.clips?.length);
+
+    // True while clips exist but at least one is still missing a primary video (worker pending/running)
+    const hasUnrenderedAutoClips =
+        Array.isArray(transcript?.clips)
+        && transcript!.clips.length > 0
+        && transcript!.clips.some(c => !c.primaryVideoId && !c.generation?.status);
+
+    const hasActiveJobs = Boolean(
+        isTranscriptProcessing(transcript)
+        || transcript?.clips?.some(isClipGenerating)
+        || isAwaitingAnalysis
+        || hasUnrenderedAutoClips
+    );
 
     useEffect(() => {
         if (!transcript || !id) return;
@@ -211,13 +229,24 @@ export default function TranscriptDetailPage() {
         }
     }, [transcript, id]);
 
+    const analysisGapStart = useRef<number | null>(null);
     useEffect(() => {
-        if (!id || !hasActiveJobs) return;
+        if (isAwaitingAnalysis) {
+            if (analysisGapStart.current === null) analysisGapStart.current = Date.now();
+        } else {
+            analysisGapStart.current = null;
+        }
+    }, [isAwaitingAnalysis]);
+
+    const analysisGapTimedOut = isAwaitingAnalysis && analysisGapStart.current !== null && Date.now() - analysisGapStart.current > 5 * 60 * 1000;
+
+    useEffect(() => {
+        if (!id || !hasActiveJobs || analysisGapTimedOut) return;
         const interval = setInterval(() => {
             fetchTranscript().catch(err => console.error('Failed to poll transcript:', err));
         }, 3000);
         return () => clearInterval(interval);
-    }, [id, hasActiveJobs, fetchTranscript]);
+    }, [id, hasActiveJobs, analysisGapTimedOut, fetchTranscript]);
 
     const generateClips = async () => {
         if (!transcript) return;
@@ -654,7 +683,7 @@ export default function TranscriptDetailPage() {
                                 </div>
                             </div>
                         )}
-                        {isTranscriptProcessing(transcript) && transcript.processingJob && (
+                        {(isTranscriptProcessing(transcript) && transcript.processingJob) && (
                             <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4 text-blue-950">
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                     <div>
@@ -676,6 +705,41 @@ export default function TranscriptDetailPage() {
                                     </Button>
                                 </div>
                             </div>
+                        )}
+                        {isAwaitingAnalysis && (
+                            <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4 text-blue-950">
+                                <div className="mb-1 flex items-center gap-2">
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <p className="font-semibold">Analyzing transcript</p>
+                                    <Badge variant="secondary">Analyzing</Badge>
+                                </div>
+                                <p className="text-sm text-blue-800">Finding the best moments to clip — this usually takes under a minute.</p>
+                            </div>
+                        )}
+                        {!isAwaitingAnalysis && (transcript?.clips?.some(isClipGenerating) || hasUnrenderedAutoClips) && (
+                            (() => {
+                                const clips = transcript!.clips;
+                                const total = clips.length;
+                                const rendered = clips.filter(c => c.primaryVideoId).length;
+                                const activeClip = clips.find(isClipGenerating);
+                                const phase = activeClip?.generation?.phase;
+                                const msg = activeClip?.generation?.progressMessage;
+                                const hasAnyActive = clips.some(isClipGenerating);
+                                return (
+                                    <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4 text-blue-950">
+                                        <div className="mb-1 flex items-center gap-2">
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                            <p className="font-semibold">
+                                                {hasAnyActive
+                                                    ? `Generating clips (${rendered} of ${total} done)`
+                                                    : 'Queuing clip generation…'}
+                                            </p>
+                                            {phase && <Badge variant="secondary">{formatPhase(phase)}</Badge>}
+                                        </div>
+                                        {msg && <p className="text-sm text-blue-800">{msg}</p>}
+                                    </div>
+                                );
+                            })()
                         )}
                         {transcript && transcript.videoUrl && (
                             <video
@@ -706,14 +770,14 @@ export default function TranscriptDetailPage() {
                                 <div className="flex flex-wrap gap-2">
                                     <Button
                                         onClick={generateClips}
-                                        disabled={analyzing || !canAnalyzeTranscript}
+                                        disabled={analyzing || !canAnalyzeTranscript || isAwaitingAnalysis || hasUnrenderedAutoClips}
                                         variant="outline"
                                     >
-                                        {analyzing ? 'Analyzing...' : transcript.clips?.length ? 'Re-analyze Clips' : 'Analyze for Clips'}
+                                        {analyzing ? 'Analyzing...' : (isAwaitingAnalysis || hasUnrenderedAutoClips) ? 'Auto-generating…' : transcript.clips?.length ? 'Re-analyze Clips' : 'Analyze for Clips'}
                                     </Button>
                                     <Button
                                         onClick={generateRemainingClips}
-                                        disabled={!remainingClipCount}
+                                        disabled={!remainingClipCount || isAwaitingAnalysis || hasUnrenderedAutoClips}
                                         variant="outline"
                                     >
                                         Generate Remaining{remainingClipCount ? ` (${remainingClipCount})` : ''}
