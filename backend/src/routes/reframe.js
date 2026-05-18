@@ -319,9 +319,11 @@ router.post('/generate', async (req, res) => {
         const { transcriptId, targetPlatform, detections, outputName, generatedClipUrl, cropParameters, captions, hook, hookStyleId, clipDefinition, clipTimeline, clipIndex, processingMode, sourceVideoId, reframeStyleId = 'fullscreen' } = req.body;
         const captionsOnly = processingMode === 'captions-only';
         const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
+        const rawTimeout = hook?.timeoutSeconds;
         const normalizedHook = {
             enabled: Boolean(hook?.enabled && hookText),
-            text: hookText || undefined
+            text: hookText || undefined,
+            timeoutSeconds: (typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) && rawTimeout > 0) ? rawTimeout : null
         };
         const hasOverlay = Boolean(captions?.enabled || normalizedHook.enabled);
         

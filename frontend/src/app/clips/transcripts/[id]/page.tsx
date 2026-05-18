@@ -8,10 +8,8 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useParams, useRouter } from 'next/navigation';
 import SmartCropModal from '@/components/SmartCropModal';
-import CaptionGenerator from '@/components/CaptionGenerator';
 import BulkEditModal from '@/components/BulkEditModal';
 import { AlertCircle, CheckSquare, Download, Eye, ExternalLink, Flame, Loader2, RefreshCcw, Save, Square, StopCircle, Trash2, Wand2 } from 'lucide-react';
-import StreamerGameplayCrop from '@/components/StreamerGameplayCrop';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -94,6 +92,7 @@ interface ClipGeneration extends ProcessingJob {
 interface ClipHook {
     text: string;
     enabled: boolean;
+    timeoutSeconds?: number | null;
     updatedAt: string | null;
 }
 
@@ -411,7 +410,8 @@ export default function TranscriptDetailPage() {
         try {
             const response = await axios.patch(`${API_URL}/clips/clips/${transcript._id}/${clipIndex}/hook`, {
                 text: hook.text,
-                enabled: hook.enabled
+                enabled: hook.enabled,
+                timeoutSeconds: hook.timeoutSeconds ?? null
             });
             setTranscript(prev => prev ? { ...prev, clips: response.data.clips || prev.clips } : prev);
             setGeneratedClips(response.data.generatedClips || {});
@@ -943,6 +943,56 @@ export default function TranscriptDetailPage() {
                                                             placeholder="Short top overlay hook"
                                                             className="w-full resize-none rounded border border-input bg-background px-2 py-1.5 text-xs text-slate-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                         />
+                                                        <div className="space-y-1">
+                                                            <p className="text-xs font-medium text-slate-600">Display duration</p>
+                                                            <div className="flex flex-wrap gap-1">
+                                                                {([null, 5, 10, 15] as (number | null)[]).map(val => (
+                                                                    <button
+                                                                        key={val ?? 'full'}
+                                                                        type="button"
+                                                                        onClick={() => updateClipHookDraft(index, { timeoutSeconds: val })}
+                                                                        className={`rounded-md px-2.5 py-1 text-xs font-medium border transition-colors ${
+                                                                            clip.hook?.timeoutSeconds === val
+                                                                                ? 'border-primary bg-primary text-primary-foreground'
+                                                                                : 'border-slate-200 hover:border-slate-400 bg-white text-slate-700'
+                                                                        }`}
+                                                                    >
+                                                                        {val === null ? 'Full clip' : `${val}s`}
+                                                                    </button>
+                                                                ))}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        if (clip.hook?.timeoutSeconds == null || [5,10,15].includes(clip.hook.timeoutSeconds)) {
+                                                                            updateClipHookDraft(index, { timeoutSeconds: 8 });
+                                                                        }
+                                                                    }}
+                                                                    className={`rounded-md px-2.5 py-1 text-xs font-medium border transition-colors ${
+                                                                        clip.hook?.timeoutSeconds != null && ![5,10,15].includes(clip.hook.timeoutSeconds)
+                                                                            ? 'border-primary bg-primary text-primary-foreground'
+                                                                            : 'border-slate-200 hover:border-slate-400 bg-white text-slate-700'
+                                                                    }`}
+                                                                >
+                                                                    Custom
+                                                                </button>
+                                                                {clip.hook?.timeoutSeconds != null && ![5,10,15].includes(clip.hook.timeoutSeconds) && (
+                                                                    <div className="flex items-center gap-1">
+                                                                        <input
+                                                                            type="number"
+                                                                            min={0.5}
+                                                                            step={0.5}
+                                                                            value={clip.hook.timeoutSeconds}
+                                                                            onChange={e => {
+                                                                                const v = parseFloat(e.target.value);
+                                                                                if (Number.isFinite(v) && v > 0) updateClipHookDraft(index, { timeoutSeconds: v });
+                                                                            }}
+                                                                            className="w-14 rounded border border-input bg-background px-2 py-0.5 text-xs"
+                                                                        />
+                                                                        <span className="text-xs text-slate-500">sec</span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
                                                         <div className="flex gap-1.5">
                                                             <Button size="sm" variant="outline" className="h-6 px-2 text-xs"
                                                                 onClick={() => regenerateClipHook(index)}
@@ -1021,16 +1071,6 @@ export default function TranscriptDetailPage() {
                 </CardContent>
             </Card>
 
-            {/* Caption Generator */}
-            {transcript && transcript.videoUrl && hasTranscriptContent && (
-                <div className="grid gap-6">
-                    <CaptionGenerator 
-                        transcriptId={transcript._id} 
-                        videoUrl={`${API_URL}${transcript.videoUrl}`} 
-                    />
-                    <StreamerGameplayCrop transcriptId={transcript._id} videoUrl={`${API_URL}${transcript.videoUrl}`} />
-                </div>
-            )}
 
             {/* Bulk Edit Modal */}
             {transcript && (

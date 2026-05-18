@@ -28,7 +28,7 @@ interface Clip {
     start?: number;
     end?: number;
     segments?: { start: number; end: number }[];
-    hook?: { text: string; enabled: boolean };
+    hook?: { text: string; enabled: boolean; timeoutSeconds?: number | null };
 }
 
 export interface BulkEditModalProps {
@@ -228,6 +228,8 @@ export default function BulkEditModal({
     const [reframeStyleId, setReframeStyleId] = useState('fullscreen');
     const [captionStyleId, setCaptionStyleId] = useState('');
     const [hookStyleId, setHookStyleId] = useState('');
+    const [hookTimeout, setHookTimeout] = useState<number | null>(null);
+    const [hookCustomInput, setHookCustomInput] = useState('8');
 
     const handlePlatformChange = (id: string) => {
         setPlatform(id);
@@ -237,6 +239,13 @@ export default function BulkEditModal({
     const [applying, setApplying] = useState(false);
     const [progressMsg, setProgressMsg] = useState('');
     const [error, setError] = useState('');
+
+    useEffect(() => {
+        if (isOpen) {
+            document.body.style.overflow = 'hidden';
+        }
+        return () => { document.body.style.overflow = ''; };
+    }, [isOpen]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -279,13 +288,26 @@ export default function BulkEditModal({
             const primaryVideo = generatedClips[idx];
             const clip = clips[idx];
 
+            const hookText = clip?.hook?.text || '';
+            const hookPayload = hookEnabled && hookText
+                ? { enabled: true, text: hookText, timeoutSeconds: hookTimeout }
+                : { enabled: false };
+
+            // Persist hook timeout separately — never blocks or fails the main render
+            if (hookEnabled && hookTimeout !== null) {
+                axios.patch(`${API_URL}/clips/clips/${transcriptId}/${idx}/hook`, {
+                    text: hookText,
+                    enabled: Boolean(hookText),
+                    timeoutSeconds: hookTimeout
+                }).catch(() => {/* best-effort */});
+            }
+
             try {
                 if (reframeEnabled) {
                     if (!primaryVideo) {
                         errors.push(`Clip ${idx + 1}: no generated video yet`);
                         continue;
                     }
-                    const hookText = clip?.hook?.text || '';
                     await axios.post(`${API_URL}/clips/reframe/generate`, {
                         transcriptId,
                         clipIndex: idx,
@@ -299,7 +321,7 @@ export default function BulkEditModal({
                         cropParameters: null,
                         captions: captionsEnabled ? { enabled: true, style: captionStyleId } : { enabled: false },
                         hookStyleId: hookEnabled ? hookStyleId : undefined,
-                        hook: (hookEnabled && hookText) ? { enabled: true, text: hookText } : { enabled: false },
+                        hook: hookPayload,
                     });
                 } else if (captionsEnabled) {
                     await axios.post(`${API_URL}/clips/captions/render-clip`, {
@@ -409,6 +431,59 @@ export default function BulkEditModal({
                                         {selectedHook?.description && (
                                             <p className="text-xs text-muted-foreground">{selectedHook.description}</p>
                                         )}
+                                        <div className="pt-1 space-y-1.5">
+                                            <p className="text-xs font-medium text-slate-700">Hook Display duration</p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {([null, 5, 10, 15] as (number | null)[]).map(val => (
+                                                    <button
+                                                        key={val ?? 'off'}
+                                                        type="button"
+                                                        disabled={applying}
+                                                        onClick={() => setHookTimeout(val)}
+                                                        className={`rounded-md px-3 py-1 text-xs font-medium border transition-colors ${
+                                                            hookTimeout === val && (val !== null || hookTimeout === null)
+                                                                ? 'border-primary bg-primary text-primary-foreground'
+                                                                : 'border-muted hover:border-muted-foreground/50 bg-background'
+                                                        } disabled:opacity-40`}
+                                                    >
+                                                        {val === null ? 'Full clip' : `${val}s`}
+                                                    </button>
+                                                ))}
+                                                <button
+                                                    type="button"
+                                                    disabled={applying}
+                                                    onClick={() => {
+                                                        const v = parseFloat(hookCustomInput);
+                                                        setHookTimeout(Number.isFinite(v) && v > 0 ? v : null);
+                                                    }}
+                                                    className={`rounded-md px-3 py-1 text-xs font-medium border transition-colors ${
+                                                        hookTimeout !== null && ![5,10,15].includes(hookTimeout)
+                                                            ? 'border-primary bg-primary text-primary-foreground'
+                                                            : 'border-muted hover:border-muted-foreground/50 bg-background'
+                                                    } disabled:opacity-40`}
+                                                >
+                                                    Custom
+                                                </button>
+                                                {hookTimeout !== null && ![5, 10, 15].includes(hookTimeout) && (
+                                                    <div className="flex items-center gap-1">
+                                                        <input
+                                                            type="number"
+                                                            min={0.5}
+                                                            step={0.5}
+                                                            value={hookCustomInput}
+                                                            onChange={e => {
+                                                                setHookCustomInput(e.target.value);
+                                                                const v = parseFloat(e.target.value);
+                                                                if (Number.isFinite(v) && v > 0) setHookTimeout(v);
+                                                            }}
+                                                            disabled={applying}
+                                                            className="w-16 rounded border border-input bg-background px-2 py-1 text-xs disabled:opacity-40"
+                                                        />
+                                                        <span className="text-xs text-muted-foreground">sec</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -432,7 +507,7 @@ export default function BulkEditModal({
                                     <div className="truncate">Captions: <span className="font-medium">{selectedCaption?.name || '—'}</span></div>
                                 )}
                                 {hookEnabled && (
-                                    <div className="truncate">Hook: <span className="font-medium">{selectedHook?.name || '—'}</span></div>
+                                    <div className="truncate">Hook: <span className="font-medium">{selectedHook?.name || '—'}</span>{hookTimeout !== null && <span className="text-muted-foreground"> · {hookTimeout}s</span>}</div>
                                 )}
                                 {nothingEnabled && (
                                     <div className="text-amber-600">Enable at least one option.</div>

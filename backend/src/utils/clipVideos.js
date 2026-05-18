@@ -40,9 +40,12 @@ function getLegacyClipVideo(transcript, clip, clipIndex) {
 
 function normalizeClipHook(hook) {
     const text = typeof hook?.text === 'string' ? hook.text.trim() : '';
+    const raw = hook?.timeoutSeconds;
+    const timeoutSeconds = (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) ? raw : null;
     return {
         text,
         enabled: Boolean(hook?.enabled && text),
+        timeoutSeconds,
         updatedAt: hook?.updatedAt || null
     };
 }

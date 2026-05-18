@@ -236,11 +236,12 @@ function getASSPlayRes(videoDimensions) {
     };
 }
 
-function buildHookASSContent(text, resolvedStyle, videoDimensions) {
+function buildHookASSContent(text, resolvedStyle, videoDimensions, timeoutSeconds) {
     const playRes = getASSPlayRes(videoDimensions);
     const hookFontSize = Math.round(resolvedStyle.fontSize || 20);
     const sideMargin = Math.max(32, Math.round(videoDimensions.width * 0.08));
     const duration = videoDimensions.duration || 24 * 60 * 60;
+    const effectiveEnd = (timeoutSeconds && timeoutSeconds > 0) ? Math.min(timeoutSeconds, duration) : duration;
     const hookColor = convertColorToASS(resolvedStyle.fontcolor);
     const hookScaleXASS = convertScaleToASSPercent(resolvedStyle.scaleX ?? 1);
     const hookScaleYASS = convertScaleToASSPercent(resolvedStyle.scaleY ?? 1);
@@ -265,7 +266,7 @@ Style: Hook,${resolvedStyle.fontName},${hookFontSize},${hookColor},&H000000FF,${
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,${formatASSTime(0)},${formatASSTime(duration)},Hook,,0,0,0,,${escapeASSText(text)}
+Dialogue: 0,${formatASSTime(0)},${formatASSTime(effectiveEnd)},Hook,,0,0,0,,${escapeASSText(text)}
 `;
 }
 
@@ -577,7 +578,7 @@ async function renderCaptionedVideo({
 
     if (hookEnabled) {
         const hookPath = path.join(tempDir, `${path.basename(outputPath, path.extname(outputPath))}_hook.ass`);
-        fs.writeFileSync(hookPath, buildHookASSContent(hookText, resolvedHookStyle, videoDimensions));
+        fs.writeFileSync(hookPath, buildHookASSContent(hookText, resolvedHookStyle, videoDimensions, hook?.timeoutSeconds));
         tempSubtitlePaths.push(hookPath);
         filters.push(buildASSSubtitleFilter(hookPath));
     }

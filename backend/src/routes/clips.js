@@ -384,6 +384,7 @@ router.patch('/:transcriptId/:clipIndex/hook', async (req, res) => {
 
         const text = typeof req.body.text === 'string' ? req.body.text.trim() : '';
         const enabled = Boolean(req.body.enabled && text);
+        const timeoutSeconds = req.body.timeoutSeconds ?? undefined;
         const normalizedClips = normalizeTranscriptClips(transcript);
 
         normalizedClips[clipIndex] = {
@@ -391,6 +392,7 @@ router.patch('/:transcriptId/:clipIndex/hook', async (req, res) => {
             hook: normalizeClipHook({
                 text,
                 enabled,
+                timeoutSeconds,
                 updatedAt: new Date().toISOString()
             })
         };

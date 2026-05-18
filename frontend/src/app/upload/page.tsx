@@ -218,8 +218,12 @@ export default function UploadClient() {
           }
         },
       });
+      const transcriptId = response.data?.transcript?._id;
+      if (transcriptId) {
+        router.push(`/clips/transcripts/${transcriptId}`);
+        return;
+      }
       setMessage(response.data?.message || 'Upload accepted. Processing in background.');
-      // Refresh the recent transcripts list and start polling
       const refreshResponse = await axios.get(`${API_URL}/clips/transcripts`);
       setRecentTranscripts(refreshResponse.data.slice(0, 6));
       setIsPolling(true);
