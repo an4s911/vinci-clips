@@ -37,6 +37,7 @@ export interface BulkEditModalProps {
     transcriptId: string;
     clipIndexes: number[];
     generatedClips: { [key: number]: ClipVideo & { index?: number; title?: string } };
+    sourceOverrides?: { [clipIndex: number]: ClipVideo };
     clips: Clip[];
     onComplete: () => void;
 }
@@ -213,6 +214,7 @@ export default function BulkEditModal({
     transcriptId,
     clipIndexes,
     generatedClips,
+    sourceOverrides,
     clips,
     onComplete,
 }: BulkEditModalProps) {
@@ -304,16 +306,17 @@ export default function BulkEditModal({
 
             try {
                 if (reframeEnabled) {
-                    if (!primaryVideo) {
+                    const sourceVideo = sourceOverrides?.[idx] || primaryVideo;
+                    if (!sourceVideo) {
                         errors.push(`Clip ${idx + 1}: no generated video yet`);
                         continue;
                     }
                     await axios.post(`${API_URL}/clips/reframe/generate`, {
                         transcriptId,
                         clipIndex: idx,
-                        generatedClipUrl: primaryVideo.url,
-                        sourceVideoId: primaryVideo.id,
-                        clipTimeline: primaryVideo.clipTimeline,
+                        generatedClipUrl: sourceVideo.url,
+                        sourceVideoId: sourceVideo.id,
+                        clipTimeline: sourceVideo.clipTimeline,
                         clipDefinition: clip,
                         targetPlatform: platform,
                         reframeStyleId,

@@ -155,6 +155,7 @@ export default function TranscriptDetailPage() {
     const [bulkDownloading, setBulkDownloading] = useState(false);
     const [isCaptionModalOpen, setIsCaptionModalOpen] = useState(false);
     const [captionModalClipIndexes, setCaptionModalClipIndexes] = useState<number[]>([]);
+    const [captionModalSourceOverrides, setCaptionModalSourceOverrides] = useState<{ [clipIndex: number]: ClipVideo }>({});
     const [sortOrder, setSortOrder] = useState<'virality' | 'order' | 'duration'>('virality');
     const [previewVideo, setPreviewVideo] = useState<{ clipIndex: number; video: ClipVideo } | null>(null);
     const [confirmDeleteVersion, setConfirmDeleteVersion] = useState<{ clipIndex: number; video: ClipVideo } | null>(null);
@@ -523,8 +524,9 @@ export default function TranscriptDetailPage() {
         }
     };
 
-    const openCaptionModal = (indexes: number[]) => {
+    const openCaptionModal = (indexes: number[], sourceOverrides?: { [clipIndex: number]: ClipVideo }) => {
         setCaptionModalClipIndexes(indexes);
+        setCaptionModalSourceOverrides(sourceOverrides || {});
         setIsCaptionModalOpen(true);
     };
 
@@ -1028,18 +1030,11 @@ export default function TranscriptDetailPage() {
                                                                     </div>
                                                                     <video controls src={`${API_URL}${version.url}`} className="w-full rounded border bg-black" style={{ maxHeight: '100px' }} />
                                                                     <div className="flex flex-wrap items-center gap-1">
+                                                                        <Button size="sm" variant="outline" className="h-6 px-2 text-xs shrink-0" onClick={() => openCaptionModal([index], { [index]: version })}>
+                                                                            Edit
+                                                                        </Button>
                                                                         <Button size="sm" variant="outline" className="h-6 px-2 text-xs shrink-0" onClick={() => openPreviewModal(index, version)}>
                                                                             <Eye className="mr-1 h-3 w-3" />Preview
-                                                                        </Button>
-                                                                        <Button
-                                                                            size="sm"
-                                                                            variant="outline"
-                                                                            className="h-6 px-2 text-xs shrink-0"
-                                                                            onClick={() => openSmartCropModal(version, index)}
-                                                                            aria-label="Smart Crop"
-                                                                            title="Smart Crop"
-                                                                        >
-                                                                            <Wand2 className="h-3 w-3" />
                                                                         </Button>
                                                                         <span className="inline-flex shrink-0 items-center gap-1">
                                                                             <Button asChild size="sm" variant="outline" className="h-6 px-2 text-xs">
@@ -1080,6 +1075,7 @@ export default function TranscriptDetailPage() {
                     transcriptId={transcript._id}
                     clipIndexes={captionModalClipIndexes}
                     generatedClips={generatedClips}
+                    sourceOverrides={captionModalSourceOverrides}
                     clips={transcript.clips}
                     onComplete={fetchTranscript}
                 />
@@ -1132,18 +1128,20 @@ export default function TranscriptDetailPage() {
                                 </div>
 
                                 <div className="grid gap-2">
-                                    {previewIsPrimary && (
-                                        <Button
-                                            size="sm"
-                                            variant="outline"
-                                            onClick={() => {
-                                                closePreviewModal();
-                                                openCaptionModal([previewVideo.clipIndex]);
-                                            }}
-                                        >
-                                            Edit
-                                        </Button>
-                                    )}
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => {
+                                            const { clipIndex, video } = previewVideo;
+                                            closePreviewModal();
+                                            openCaptionModal(
+                                                [clipIndex],
+                                                previewIsPrimary ? undefined : { [clipIndex]: video }
+                                            );
+                                        }}
+                                    >
+                                        Edit
+                                    </Button>
                                     <Button
                                         size="sm"
                                         variant="outline"
