@@ -121,7 +121,7 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
                             if (j.id !== job.id) return j;
                             return {
                                 ...j,
-                                status: terminal ? (pj.status === 'completed' ? 'completed' : 'failed') : 'running',
+                                status: (terminal ? (pj.status === 'completed' ? 'completed' : 'failed') : 'running') as JobStatus,
                                 phase: pj.phase || pj.progressMessage,
                             };
                         });

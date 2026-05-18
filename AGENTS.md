@@ -97,6 +97,10 @@ npm run lint
 - **Background jobs:** `src/utils/backgroundJobs.js` — async job state management; calls `Transcript.findByIdAndUpdate` without userId (correct, these are internal updates)
 - **Media protection:** `/uploads/*` is served behind `requireAuth` middleware
 - **File Processing:** Uses `fluent-ffmpeg` for video-to-MP3 conversion and caption burning
+- **URL import services:**
+  - `src/services/youtubeMetadata.js` — always used for YouTube metadata via YouTube Data API v3 (requires `YOUTUBE_API_KEY`)
+  - `src/services/savenowDownloader.js` — download provider using `video-download-api.com`; selected via `VIDEO_DOWNLOAD_PROVIDER=savenow`
+  - Download provider toggled by `VIDEO_DOWNLOAD_PROVIDER` env var: `ytdlp` (default) or `savenow`
 
 ### Frontend Structure
 - **App Router:** Uses Next.js 13+ app directory structure
@@ -145,12 +149,32 @@ REDIS_PASSWORD=<password>
 
 For higher transcription usage, use `CHUNK_DURATION_SEC=300`, `CHUNK_OVERLAP_SEC=30`, and `CHUNK_CONCURRENCY=4`.
 
+### YouTube Import Environment Variables
+```
+# Always required for YouTube URL imports (metadata)
+YOUTUBE_API_KEY=<youtube-data-api-v3-key>
+
+# Download provider: ytdlp (default) or savenow
+VIDEO_DOWNLOAD_PROVIDER=ytdlp
+
+# Required only when VIDEO_DOWNLOAD_PROVIDER=savenow
+VIDEO_DOWNLOAD_API_HOST=p.savenow.to
+VIDEO_DOWNLOAD_API_KEY=<savenow-api-key>
+VIDEO_DOWNLOAD_FORMAT=1080
+
+# Optional yt-dlp tuning (ytdlp provider only)
+YTDLP_COOKIES_PATH=
+YTDLP_USER_AGENT=
+```
+
 ### Prerequisites
 - Node.js v22+
 - FFmpeg in system PATH
 - PostgreSQL 18 (or Docker)
 - Redis (or Docker)
 - Gemini API key
+- YouTube Data API v3 key (for URL imports)
+- savenow API key (optional, only if `VIDEO_DOWNLOAD_PROVIDER=savenow`)
 
 ## Development Guidelines
 

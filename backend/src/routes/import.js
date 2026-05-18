@@ -18,6 +18,10 @@ const {
 const { deleteLocalMedia, deleteTranscriptTransientMedia } = require('../utils/mediaStorage');
 const { analyzeAndAutoGenerateClips } = require('../utils/clipAutomation');
 const { classifyImportFailure, classifyTranscriptionFailure } = require('../utils/failureMessages');
+const { extractYouTubeMetadata } = require('../services/youtubeMetadata');
+const { downloadYouTubeVideoSavenow } = require('../services/savenowDownloader');
+
+const DOWNLOAD_PROVIDER = (process.env.VIDEO_DOWNLOAD_PROVIDER || 'ytdlp').toLowerCase();
 
 const router = express.Router();
 const execOptions = { maxBuffer: 20 * 1024 * 1024 };
@@ -73,27 +77,11 @@ function getYtDlpArgs(args) {
     return finalArgs;
 }
 
-async function extractYouTubeVideo(transcriptId, url) {
-    const { stdout } = await runTrackedFile({
-        transcriptId,
-        jobType: 'import',
-        phase: 'extract-metadata',
-        file: 'yt-dlp',
-        args: getYtDlpArgs(['--dump-single-json', '--no-warnings', '--no-playlist', url]),
-        options: execOptions,
-    });
-    const videoDetails = JSON.parse(stdout);
-    const thumbnails = Array.isArray(videoDetails.thumbnails) ? videoDetails.thumbnails : [];
-    const bestThumbnail = thumbnails.length ? thumbnails[thumbnails.length - 1].url : null;
-
+async function extractYouTubeVideo(url) {
+    const meta = await extractYouTubeMetadata(url);
     return {
-        title: sanitizeFilename(videoDetails.title || videoDetails.fulltitle || 'youtube-import'),
-        description: videoDetails.description || '',
-        duration: Number(videoDetails.duration) || 0,
-        thumbnail: bestThumbnail,
-        platform: 'youtube',
-        originalUrl: url,
-        videoId: videoDetails.id
+        ...meta,
+        title: sanitizeFilename(meta.title || 'youtube-import'),
     };
 }
 
@@ -113,21 +101,25 @@ async function extractVimeoVideo(url) {
     };
 }
 
-async function downloadYouTubeVideo(transcriptId, url, outputPath) {
-    await runTrackedFile({
-        transcriptId,
-        jobType: 'import',
-        phase: 'download-video',
-        file: 'yt-dlp',
-        args: getYtDlpArgs([
-            '--no-playlist',
-            '--format', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
-            '--merge-output-format', 'mp4',
-            '--output', outputPath,
-            url
-        ]),
-        options: execOptions,
-    });
+async function downloadYouTubeVideo(transcriptId, url, outputPath, { onProgress, signal } = {}) {
+    if (DOWNLOAD_PROVIDER === 'savenow') {
+        await downloadYouTubeVideoSavenow(transcriptId, url, outputPath, { onProgress, signal });
+    } else {
+        await runTrackedFile({
+            transcriptId,
+            jobType: 'import',
+            phase: 'download-video',
+            file: 'yt-dlp',
+            args: getYtDlpArgs([
+                '--no-playlist',
+                '--format', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
+                '--merge-output-format', 'mp4',
+                '--output', outputPath,
+                url
+            ]),
+            options: execOptions,
+        });
+    }
 }
 
 async function processUrlImport({ transcriptId, url, platform }) {
@@ -144,7 +136,7 @@ async function processUrlImport({ transcriptId, url, platform }) {
     await markTranscriptPhase(transcriptId, jobType, 'extract-metadata', 'Extracting video metadata.', { url, platform });
     let videoInfo;
     if (platform === 'youtube') {
-        videoInfo = await extractYouTubeVideo(transcriptId, url);
+        videoInfo = await extractYouTubeVideo(url);
     } else if (platform === 'vimeo') {
         videoInfo = await extractVimeoVideo(url);
         throw new Error('Direct download is not supported for Vimeo imports yet.');
@@ -162,7 +154,15 @@ async function processUrlImport({ transcriptId, url, platform }) {
 
     await assertTranscriptNotCancelled(transcriptId, jobType);
     await markTranscriptPhase(transcriptId, jobType, 'download-video', 'Downloading source video.', { url, platform });
-    await downloadYouTubeVideo(transcriptId, url, videoPath);
+    const abortController = new AbortController();
+    await downloadYouTubeVideo(transcriptId, url, videoPath, {
+        signal: abortController.signal,
+        onProgress: (pct, text) => markTranscriptPhase(
+            transcriptId, jobType, 'download-video',
+            text ? `Downloading ${pct}% — ${text}` : `Downloading ${pct}%`,
+            { url, platform }
+        ),
+    });
 
     await assertTranscriptNotCancelled(transcriptId, jobType);
     await markTranscriptPhase(transcriptId, jobType, 'convert-mp3', 'Converting video audio to MP3.', { fileName: originalFilename });

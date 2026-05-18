@@ -53,7 +53,19 @@ app.use(cors({
 app.use(express.json());
 app.use(logger.requestMiddleware);
 
+function validateEnv() {
+    if (!process.env.YOUTUBE_API_KEY) {
+        logger.warn('YOUTUBE_API_KEY is not set — YouTube metadata extraction will fail.');
+    }
+    const provider = (process.env.VIDEO_DOWNLOAD_PROVIDER || 'ytdlp').toLowerCase();
+    if (provider === 'savenow' && !process.env.VIDEO_DOWNLOAD_API_KEY) {
+        logger.error('VIDEO_DOWNLOAD_PROVIDER=savenow but VIDEO_DOWNLOAD_API_KEY is not set. Exiting.');
+        process.exit(1);
+    }
+}
+
 async function startServer() {
+    validateEnv();
     // Connect Redis for session store
     const redisClient = createClient({
         socket: {
