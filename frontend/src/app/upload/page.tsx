@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useRouter } from 'next/navigation';
+import { useJobs } from '@/components/JobsProvider';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -56,6 +57,7 @@ interface Transcript {
 
 export default function UploadClient() {
   const router = useRouter();
+  const { enqueueJob } = useJobs();
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [progressText, setProgressText] = useState('');
@@ -220,6 +222,7 @@ export default function UploadClient() {
       });
       const transcriptId = response.data?.transcript?._id;
       if (transcriptId) {
+        enqueueJob({ id: crypto.randomUUID(), kind: 'transcript', label: file.name, transcriptId, status: 'running', createdAt: Date.now() });
         router.push(`/clips/transcripts/${transcriptId}`);
         return;
       }
@@ -254,6 +257,7 @@ export default function UploadClient() {
 
       const transcriptId = response.data?.transcript?._id;
       if (transcriptId) {
+        enqueueJob({ id: crypto.randomUUID(), kind: 'transcript', label: importUrl.trim(), transcriptId, status: 'running', createdAt: Date.now() });
         router.push(`/clips/transcripts/${transcriptId}`);
         return;
       }

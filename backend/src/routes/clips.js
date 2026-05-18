@@ -19,6 +19,7 @@ const {
     createJobState,
     requestClipCancel,
     startClipWorker,
+    updateClipActiveJob,
     updateClipGeneration
 } = require('../utils/backgroundJobs');
 
@@ -115,6 +116,9 @@ async function queueClipGeneration(transcript, transcriptId, clipIndex) {
         phase: 'prepare',
         progressMessage: 'Clip generation queued.',
     }));
+
+    // Clear any stale activeJob (leftover reframe/caption render) so the UI doesn't show stale state
+    await updateClipActiveJob(transcriptId, clipIndex, { status: 'completed', completedAt: new Date().toISOString() }).catch(() => {});
 
     const started = startClipWorker(transcriptId, clipIndex, () => generateSingleClipInBackground(transcriptId, clipIndex));
     if (!started) {
@@ -536,6 +540,9 @@ router.delete('/:transcriptId/:clipIndex/videos/:videoId', async (req, res) => {
         if (!updatedTranscript) {
             return res.status(404).json({ error: 'Video version not found.' });
         }
+
+        // Clear stale activeJob so the render indicator doesn't persist after deletion
+        await updateClipActiveJob(transcriptId, clipIndex, { status: 'completed', completedAt: new Date().toISOString() }).catch(() => {});
 
         const clips = normalizeTranscriptClips(updatedTranscript);
         res.json({

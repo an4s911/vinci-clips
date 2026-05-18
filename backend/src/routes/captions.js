@@ -19,6 +19,12 @@ const {
     normalizeTranscriptClips,
     makeTimestampedFilename,
 } = require('../utils/clipVideos');
+const {
+    activeClipRenderJobs,
+    startClipRenderWorker,
+    updateClipActiveJob,
+    nowIso,
+} = require('../utils/backgroundJobs');
 
 const router = express.Router();
 
@@ -123,13 +129,18 @@ router.post('/render-clip', async (req, res) => {
             return res.status(400).json({ success: false, error: 'transcriptId and clipIndex are required' });
         }
 
+        const parsedClipIndex = Number(clipIndex);
+        if (!Number.isInteger(parsedClipIndex) || parsedClipIndex < 0) {
+            return res.status(400).json({ success: false, error: 'clipIndex must be a non-negative integer' });
+        }
+
         const transcript = await Transcript.findById(transcriptId, { userId: req.user.id });
         if (!transcript) {
             return res.status(404).json({ success: false, error: 'Transcript not found' });
         }
 
         const normalizedClips = normalizeTranscriptClips(transcript);
-        const clip = normalizedClips[clipIndex];
+        const clip = normalizedClips[parsedClipIndex];
         if (!clip) {
             return res.status(404).json({ success: false, error: 'Clip not found' });
         }
@@ -139,59 +150,87 @@ router.post('/render-clip', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Clip has no primary video yet — generate the clip first' });
         }
 
-        const inputPath = getVideoFilePath(primaryVideo);
-        const tempDir = path.join(__dirname, '../../temp');
-        fs.mkdirSync(tempDir, { recursive: true });
-
-        const outputFilename = makeTimestampedFilename(transcriptId, clipIndex, '_captioned');
-        const outputPath = path.join(tempDir, outputFilename);
-
+        await validateTemplateUsage(captionStyleId, 'captions');
         const effectiveHookText = typeof hookText === 'string' ? hookText.trim() : (clip.hook?.text || '');
         const hookEnabled = Boolean(clip.hook?.enabled && effectiveHookText);
-        await validateTemplateUsage(captionStyleId, 'captions');
         if (hookEnabled && hookStyleId) {
             await validateTemplateUsage(hookStyleId, 'hooks');
         }
 
         const words = normalizeTranscriptWords(transcript.transcript);
         const clipWords = buildWordsForClip(words, clip, primaryVideo.clipTimeline);
-
         if (clipWords.length === 0) {
             return res.status(400).json({ success: false, error: 'No transcript words found for this clip time range' });
         }
 
-        const result = await renderCaptionedVideo({
-            inputPath,
-            outputPath,
-            transcriptSegments: clipWords,
-            styleId: captionStyleId,
-            hookStyleId,
-            captionsEnabled: true,
-            hook: { enabled: hookEnabled, text: effectiveHookText },
-            logger: console,
-        });
+        const renderKey = `render:${transcriptId}:${parsedClipIndex}`;
+        if (activeClipRenderJobs.has(renderKey)) {
+            return res.status(409).json({ success: false, error: 'A render is already in progress for this clip' });
+        }
 
+        const inputPath = getVideoFilePath(primaryVideo);
+        const tempDir = path.join(__dirname, '../../temp');
+        fs.mkdirSync(tempDir, { recursive: true });
+        const outputFilename = makeTimestampedFilename(transcriptId, parsedClipIndex, '_captioned');
+        const outputPath = path.join(tempDir, outputFilename);
         const destDir = path.join(__dirname, '..', '..', 'uploads', 'captioned');
-        fs.mkdirSync(destDir, { recursive: true });
         const destPath = path.join(destDir, outputFilename);
-        moveFileSafe(outputPath, destPath);
 
-        const videoRecord = createClipVideoRecord({
-            type: 'captioned',
-            url: `/uploads/captioned/${outputFilename}`,
-            filename: outputFilename,
-            captions: { enabled: true, style: result.resolvedStyle.id },
-            hook: { enabled: hookEnabled, text: effectiveHookText, style: hookStyleId || captionStyleId },
+        await updateClipActiveJob(transcriptId, parsedClipIndex, {
+            status: 'queued',
+            jobType: 'caption-render',
+            progressMessage: 'Caption render queued.',
+            startedAt: nowIso(),
+            completedAt: null,
+            error: null,
         });
 
-        const updatedTranscript = await appendPrimaryClipVideo(Transcript, transcript, Number(clipIndex), videoRecord);
+        startClipRenderWorker(transcriptId, parsedClipIndex, 'caption-render', async () => {
+            await updateClipActiveJob(transcriptId, parsedClipIndex, {
+                status: 'running',
+                progressMessage: 'Rendering captions…',
+            });
 
-        res.json({
-            success: true,
-            clipIndex: Number(clipIndex),
-            video: videoRecord,
-            clips: updatedTranscript.clips,
+            const freshTranscript = await Transcript.findById(transcriptId);
+            const freshClips = normalizeTranscriptClips(freshTranscript);
+            const freshClip = freshClips[parsedClipIndex];
+            const freshPrimary = getPrimaryClipVideo(freshClip);
+            const freshWords = normalizeTranscriptWords(freshTranscript.transcript);
+            const freshClipWords = buildWordsForClip(freshWords, freshClip, freshPrimary.clipTimeline);
+
+            const result = await renderCaptionedVideo({
+                inputPath,
+                outputPath,
+                transcriptSegments: freshClipWords,
+                styleId: captionStyleId,
+                hookStyleId,
+                captionsEnabled: true,
+                hook: { enabled: hookEnabled, text: effectiveHookText },
+                logger: console,
+            });
+
+            fs.mkdirSync(destDir, { recursive: true });
+            moveFileSafe(outputPath, destPath);
+
+            const videoRecord = createClipVideoRecord({
+                type: 'captioned',
+                url: `/uploads/captioned/${outputFilename}`,
+                filename: outputFilename,
+                captions: { enabled: true, style: result.resolvedStyle.id },
+                hook: { enabled: hookEnabled, text: effectiveHookText, style: hookStyleId || captionStyleId },
+            });
+
+            await appendPrimaryClipVideo(Transcript, freshTranscript, parsedClipIndex, videoRecord);
+
+            await updateClipActiveJob(transcriptId, parsedClipIndex, {
+                status: 'completed',
+                progressMessage: 'Caption render completed.',
+                completedAt: nowIso(),
+                error: null,
+            });
         });
+
+        return res.status(202).json({ accepted: true, transcriptId, clipIndex: parsedClipIndex });
     } catch (error) {
         console.error('Clip caption render error:', error);
         res.status(error.statusCode || 500).json({

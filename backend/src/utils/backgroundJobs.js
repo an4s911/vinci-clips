@@ -5,6 +5,7 @@ const logger = require('./logger');
 
 const activeTranscriptJobs = new Map();
 const activeClipJobs = new Map();
+const activeClipRenderJobs = new Map();
 
 function buildTranscriptionPrompt() {
     return "Transcribe this audio with word-level timestamps. All timestamps must be relative to the start of this audio — the first sample is 00:00:000. " +
@@ -431,6 +432,48 @@ function startClipWorker(transcriptId, clipIndex, worker) {
     return true;
 }
 
+async function updateClipActiveJob(transcriptId, clipIndex, updates = {}) {
+    const transcript = await Transcript.findById(transcriptId);
+    if (!transcript || !Array.isArray(transcript.clips) || !transcript.clips[clipIndex]) return null;
+
+    const clips = transcript.clips.map((clip, index) => {
+        if (index !== clipIndex) return clip;
+        return {
+            ...clip,
+            activeJob: {
+                ...(clip.activeJob || {}),
+                ...updates,
+                updatedAt: nowIso(),
+            },
+        };
+    });
+
+    return Transcript.findByIdAndUpdate(transcriptId, { clips });
+}
+
+function startClipRenderWorker(transcriptId, clipIndex, jobType, worker) {
+    const key = `render:${transcriptId}:${clipIndex}`;
+    if (activeClipRenderJobs.has(key)) return false;
+    activeClipRenderJobs.set(key, { transcriptId, clipIndex, jobType });
+
+    setImmediate(async () => {
+        try {
+            await worker();
+        } catch (error) {
+            await updateClipActiveJob(transcriptId, clipIndex, {
+                status: 'failed',
+                progressMessage: 'Render failed.',
+                completedAt: nowIso(),
+                error: error?.message || String(error),
+            }).catch(() => {});
+        } finally {
+            activeClipRenderJobs.delete(key);
+        }
+    });
+
+    return true;
+}
+
 function resolveLocalUploadPath(mediaUrl) {
     if (!mediaUrl || typeof mediaUrl !== 'string') return null;
     const normalized = mediaUrl.replace(/^\/+/, '');
@@ -446,7 +489,10 @@ module.exports = {
     TRANSCRIPTION_PROMPT,
     TRANSCRIPTION_SCHEMA,
     activeClipJobs,
+    activeClipRenderJobs,
     activeTranscriptJobs,
+    startClipRenderWorker,
+    updateClipActiveJob,
     assertClipNotCancelled,
     assertTranscriptNotCancelled,
     completeClipGeneration,

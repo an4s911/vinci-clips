@@ -144,25 +144,50 @@ function createClipVideoRecord({
     };
 }
 
-async function appendPrimaryClipVideo(Transcript, transcript, clipIndex, videoRecord) {
-    if (!Number.isInteger(clipIndex) || clipIndex < 0 || clipIndex >= (transcript.clips || []).length) {
-        throw new Error('Invalid clip index for video version.');
-    }
+// Per-transcript mutex — prevents concurrent workers clobbering each other's
+// clips array writes when doing bulk operations on the same transcript.
+const transcriptWriteLocks = new Map();
 
-    const normalizedClips = normalizeTranscriptClips(transcript);
-    const targetClip = normalizedClips[clipIndex];
-    const nextVideos = [...(targetClip.videos || []), videoRecord];
-    normalizedClips[clipIndex] = {
-        ...targetClip,
-        videos: nextVideos,
-        primaryVideoId: videoRecord.id
-    };
-
-    const updatedTranscript = await Transcript.findByIdAndUpdate(transcript._id, {
-        clips: normalizedClips
+function withTranscriptWriteLock(transcriptId, fn) {
+    const prev = transcriptWriteLocks.get(transcriptId) || Promise.resolve();
+    let unlock;
+    const next = new Promise(r => { unlock = r; });
+    transcriptWriteLocks.set(transcriptId, next);
+    return prev.then(async () => {
+        try {
+            return await fn();
+        } finally {
+            unlock();
+            if (transcriptWriteLocks.get(transcriptId) === next) {
+                transcriptWriteLocks.delete(transcriptId);
+            }
+        }
     });
-    transcript.clips = normalizedClips;
-    return updatedTranscript;
+}
+
+async function appendPrimaryClipVideo(Transcript, transcript, clipIndex, videoRecord) {
+    return withTranscriptWriteLock(transcript._id, async () => {
+        // Re-fetch inside the lock so we always write against the latest state.
+        const fresh = await Transcript.findById(transcript._id);
+        const t = fresh || transcript;
+
+        if (!Number.isInteger(clipIndex) || clipIndex < 0 || clipIndex >= (t.clips || []).length) {
+            throw new Error('Invalid clip index for video version.');
+        }
+
+        const normalizedClips = normalizeTranscriptClips(t);
+        const targetClip = normalizedClips[clipIndex];
+        const nextVideos = [...(targetClip.videos || []), videoRecord];
+        normalizedClips[clipIndex] = {
+            ...targetClip,
+            videos: nextVideos,
+            primaryVideoId: videoRecord.id,
+        };
+
+        const updatedTranscript = await Transcript.findByIdAndUpdate(t._id, { clips: normalizedClips });
+        transcript.clips = normalizedClips;
+        return updatedTranscript;
+    });
 }
 
 function getVideoFilePath(video) {

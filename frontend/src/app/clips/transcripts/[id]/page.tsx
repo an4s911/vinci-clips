@@ -96,6 +96,15 @@ interface ClipHook {
     updatedAt: string | null;
 }
 
+interface ClipActiveJob {
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    jobType?: string;
+    progressMessage?: string;
+    error?: string | null;
+    startedAt?: string | null;
+    completedAt?: string | null;
+}
+
 interface Clip {
     title: string;
     start?: number;
@@ -109,6 +118,7 @@ interface Clip {
     videos?: ClipVideo[];
     primaryVideoId?: string | null;
     generation?: ClipGeneration | null;
+    activeJob?: ClipActiveJob | null;
 }
 
 interface Transcript {
@@ -212,11 +222,16 @@ export default function TranscriptDetailPage() {
         && transcript!.clips.length > 0
         && transcript!.clips.some(c => !c.primaryVideoId && !c.generation?.status);
 
+    const hasActiveRenderJobs = Boolean(
+        transcript?.clips?.some(c => c.activeJob?.status === 'queued' || c.activeJob?.status === 'running')
+    );
+
     const hasActiveJobs = Boolean(
         isTranscriptProcessing(transcript)
         || transcript?.clips?.some(isClipGenerating)
         || isAwaitingAnalysis
         || hasUnrenderedAutoClips
+        || hasActiveRenderJobs
     );
 
     useEffect(() => {
@@ -917,6 +932,26 @@ export default function TranscriptDetailPage() {
                                                         <Badge variant={clip.generation.status === 'failed' ? 'destructive' : 'secondary'} className="mr-1 text-xs">{clip.generation.status}</Badge>
                                                         {clip.generation.progressMessage}
                                                         {clip.generation.error ? <span className="block mt-0.5 text-xs opacity-75">{clip.generation.error}</span> : null}
+                                                    </div>
+                                                )}
+
+                                                {/* Reframe / caption render active job (persists across reload) */}
+                                                {clip.activeJob && clip.activeJob.status !== 'completed' && !(
+                                                    // Treat as stale if running/queued for more than 30 minutes (e.g. backend restarted)
+                                                    (clip.activeJob.status === 'running' || clip.activeJob.status === 'queued')
+                                                    && clip.activeJob.startedAt
+                                                    && Date.now() - new Date(clip.activeJob.startedAt).getTime() > 30 * 60 * 1000
+                                                ) && (
+                                                    <div className={`rounded border px-2 py-1.5 text-xs flex items-center gap-1.5 ${clip.activeJob.status === 'failed' ? 'border-red-200 bg-red-50 text-red-800' : 'border-blue-200 bg-blue-50 text-blue-800'}`}>
+                                                        {(clip.activeJob.status === 'running' || clip.activeJob.status === 'queued') && (
+                                                            <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" />
+                                                        )}
+                                                        <Badge variant={clip.activeJob.status === 'failed' ? 'destructive' : 'secondary'} className="mr-0.5 text-xs">
+                                                            {clip.activeJob.jobType || clip.activeJob.status}
+                                                        </Badge>
+                                                        {clip.activeJob.status === 'failed'
+                                                            ? (clip.activeJob.error || 'Render failed')
+                                                            : (clip.activeJob.progressMessage || clip.activeJob.status)}
                                                     </div>
                                                 )}
 

@@ -5,6 +5,7 @@ import axios from 'axios';
 import { Button } from '@/components/ui/button';
 import { CaptionTemplatePreview, CaptionPreviewTemplate, CaptionPreviewAspect } from '@/components/CaptionTemplatePreview';
 import { Loader2, Monitor, Smartphone, Square, X } from 'lucide-react';
+import { useJobs } from '@/components/JobsProvider';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -239,8 +240,8 @@ export default function BulkEditModal({
     };
 
     const [applying, setApplying] = useState(false);
-    const [progressMsg, setProgressMsg] = useState('');
     const [error, setError] = useState('');
+    const { enqueueJob, updateJob } = useJobs(); // updateJob used for parent job completion
 
     useEffect(() => {
         if (isOpen) {
@@ -278,39 +279,45 @@ export default function BulkEditModal({
 
     const handleApply = async () => {
         if (nothingEnabled) return;
-        setApplying(true);
         setError('');
-        setProgressMsg('');
+        setApplying(true);
+
+        const parentId = crypto.randomUUID();
+        const total = clipIndexes.length;
+        enqueueJob({
+            id: parentId,
+            kind: 'bulk-apply',
+            label: `${reframeEnabled ? 'Reframe' : 'Captions'} · ${total} clip${total > 1 ? 's' : ''}`,
+            transcriptId,
+            status: 'running',
+            progress: { done: 0, total },
+            createdAt: Date.now(),
+        });
 
         const errors: string[] = [];
         let done = 0;
 
-        for (const idx of clipIndexes) {
-            setProgressMsg(`Processing clip ${done + 1} of ${clipIndexes.length}…`);
-            const primaryVideo = generatedClips[idx];
+        await Promise.all(clipIndexes.map(async (idx) => {
             const clip = clips[idx];
-
+            const primaryVideo = generatedClips[idx];
             const hookText = clip?.hook?.text || '';
             const hookPayload = hookEnabled && hookText
                 ? { enabled: true, text: hookText, timeoutSeconds: hookTimeout }
                 : { enabled: false };
 
-            // Persist hook timeout separately — never blocks or fails the main render
+            // Persist hook timeout — fire-and-forget
             if (hookEnabled && hookTimeout !== null) {
                 axios.patch(`${API_URL}/clips/clips/${transcriptId}/${idx}/hook`, {
                     text: hookText,
                     enabled: Boolean(hookText),
-                    timeoutSeconds: hookTimeout
-                }).catch(() => {/* best-effort */});
+                    timeoutSeconds: hookTimeout,
+                }).catch(() => {});
             }
 
             try {
                 if (reframeEnabled) {
                     const sourceVideo = sourceOverrides?.[idx] || primaryVideo;
-                    if (!sourceVideo) {
-                        errors.push(`Clip ${idx + 1}: no generated video yet`);
-                        continue;
-                    }
+                    if (!sourceVideo) throw new Error('no generated video yet');
                     await axios.post(`${API_URL}/clips/reframe/generate`, {
                         transcriptId,
                         clipIndex: idx,
@@ -341,16 +348,20 @@ export default function BulkEditModal({
                     : err instanceof Error ? err.message : 'Unknown error';
                 errors.push(`Clip ${idx + 1}: ${message}`);
             }
-        }
+        }));
+
+        updateJob(parentId, {
+            status: errors.length === total ? 'failed' : 'completed',
+            progress: { done, total },
+            error: errors.length ? errors.join('\n') : undefined,
+        });
 
         setApplying(false);
-        setProgressMsg('');
-
-        if (errors.length > 0) {
-            setError(`${done} done, ${errors.length} failed:\n${errors.join('\n')}`);
+        if (errors.length === total) {
+            setError(errors.join('\n'));
         } else {
-            onComplete();
             onClose();
+            onComplete();
         }
     };
 
@@ -365,7 +376,7 @@ export default function BulkEditModal({
                     <h2 className="text-lg font-semibold">
                         {isBulk ? `Bulk Edit — ${clipIndexes.length} Clips` : 'Edit Clip'}
                     </h2>
-                    <button onClick={onClose} disabled={applying} className="text-muted-foreground hover:text-foreground">
+                    <button onClick={onClose} disabled={applying} className="text-muted-foreground hover:text-foreground disabled:opacity-40">
                         <X className="h-5 w-5" />
                     </button>
                 </div>
@@ -390,7 +401,7 @@ export default function BulkEditModal({
                                                 <button
                                                     key={p.id}
                                                     onClick={() => handlePlatformChange(p.id)}
-                                                    disabled={applying}
+                                                    disabled={false}
                                                     className={`flex flex-col items-center gap-2 rounded-lg border-2 py-3 px-2 text-xs font-medium transition-colors ${
                                                         platform === p.id ? 'border-primary bg-primary/5' : 'border-muted hover:border-muted-foreground/40'
                                                     }`}
@@ -404,7 +415,7 @@ export default function BulkEditModal({
                                         {platform === 'tiktok' && (
                                             <div className="space-y-1">
                                                 <p className="text-xs text-muted-foreground">Style</p>
-                                                <ReframeStylePicker value={reframeStyleId} onChange={setReframeStyleId} disabled={applying} />
+                                                <ReframeStylePicker value={reframeStyleId} onChange={setReframeStyleId} disabled={false} />
                                             </div>
                                         )}
                                     </div>
@@ -416,7 +427,7 @@ export default function BulkEditModal({
                                 <SectionHeader title="Caption Style" enabled={captionsEnabled} onToggle={() => setCaptionsEnabled(v => !v)} />
                                 {captionsEnabled && (
                                     <div className="pl-1 space-y-2">
-                                        <StyleGrid styles={captionStyles} value={captionStyleId} onChange={setCaptionStyleId} disabled={applying} />
+                                        <StyleGrid styles={captionStyles} value={captionStyleId} onChange={setCaptionStyleId} disabled={false} />
                                         {selectedCaption?.description && (
                                             <p className="text-xs text-muted-foreground">{selectedCaption.description}</p>
                                         )}
@@ -430,7 +441,7 @@ export default function BulkEditModal({
                                 {hookEnabled && (
                                     <div className="pl-1 space-y-2">
                                         <p className="text-xs text-muted-foreground">Uses each clip&apos;s saved hook text. Edit per-clip before applying.</p>
-                                        <StyleGrid styles={hookStyles} value={hookStyleId} onChange={setHookStyleId} disabled={applying} />
+                                        <StyleGrid styles={hookStyles} value={hookStyleId} onChange={setHookStyleId} disabled={false} />
                                         {selectedHook?.description && (
                                             <p className="text-xs text-muted-foreground">{selectedHook.description}</p>
                                         )}
@@ -441,7 +452,7 @@ export default function BulkEditModal({
                                                     <button
                                                         key={val ?? 'off'}
                                                         type="button"
-                                                        disabled={applying}
+                                                        disabled={false}
                                                         onClick={() => setHookTimeout(val)}
                                                         className={`rounded-md px-3 py-1 text-xs font-medium border transition-colors ${
                                                             hookTimeout === val && (val !== null || hookTimeout === null)
@@ -454,7 +465,7 @@ export default function BulkEditModal({
                                                 ))}
                                                 <button
                                                     type="button"
-                                                    disabled={applying}
+                                                    disabled={false}
                                                     onClick={() => {
                                                         const v = parseFloat(hookCustomInput);
                                                         setHookTimeout(Number.isFinite(v) && v > 0 ? v : null);
@@ -479,7 +490,7 @@ export default function BulkEditModal({
                                                                 const v = parseFloat(e.target.value);
                                                                 if (Number.isFinite(v) && v > 0) setHookTimeout(v);
                                                             }}
-                                                            disabled={applying}
+                                                            disabled={false}
                                                             className="w-16 rounded border border-input bg-background px-2 py-1 text-xs disabled:opacity-40"
                                                         />
                                                         <span className="text-xs text-muted-foreground">sec</span>
@@ -525,16 +536,11 @@ export default function BulkEditModal({
                     {error && (
                         <div className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 whitespace-pre-wrap">{error}</div>
                     )}
-                    {progressMsg && (
-                        <div className="mb-3 flex items-center gap-2 text-sm text-muted-foreground">
-                            <Loader2 className="h-4 w-4 animate-spin" />{progressMsg}
-                        </div>
-                    )}
                     <div className="flex justify-end gap-3">
                         <Button variant="outline" onClick={onClose} disabled={applying}>Cancel</Button>
                         <Button onClick={handleApply} disabled={applying || nothingEnabled || missingRequiredTemplate || fetching}>
                             {applying
-                                ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Applying…</>
+                                ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Starting…</>
                                 : `Apply to ${clipIndexes.length} clip${clipIndexes.length > 1 ? 's' : ''}`}
                         </Button>
                     </div>
