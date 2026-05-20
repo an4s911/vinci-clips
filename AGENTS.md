@@ -271,3 +271,4 @@ Background jobs use `findByIdAndUpdate` without userId — this is intentional s
 - When code changes require documentation, document them in `README.md` or in the relevant `.md` files listed from `README.md`.
 - in commits remove any presence of Claude including any mentions in the commit message
 - Never run `npm run build`, ask the user to do so if needed.
+- In production, the file `docker-compose.prod.yml` is used.

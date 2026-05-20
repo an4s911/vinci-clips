@@ -300,6 +300,12 @@ router.post('/url', async (req, res) => {
             if (error?.code === 'JOB_CANCELLED' || await isTranscriptCancelRequested(transcript._id)) {
                 throw error;
             }
+            logVideoProcessing(transcript._id, 'failed', 'Import error (raw)', {
+                jobType: 'import',
+                rawError: error?.message,
+                rawCode: error?.code,
+                stderr: error?.stderr?.slice?.(0, 500),
+            });
             const current = await Transcript.findById(transcript._id);
             const failure = current?.mp3Url
                 ? classifyTranscriptionFailure(error)

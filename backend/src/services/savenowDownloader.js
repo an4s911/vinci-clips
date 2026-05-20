@@ -1,5 +1,6 @@
 const axios = require('axios');
 const fs = require('fs');
+const logger = require('../utils/logger');
 
 const POLL_INTERVAL_MS = 2000;
 const TIMEOUT_MS = 15 * 60 * 1000;
@@ -59,12 +60,23 @@ async function downloadYouTubeVideoSavenow(transcriptId, url, outputPath, { onPr
         }
 
         if (success === 1 && download_url) {
-            await streamDownload(download_url, outputPath, signal);
+            logger.info('savenow job ready, downloading file', { jobId, download_url });
+            try {
+                await streamDownload(download_url, outputPath, signal);
+            } catch (err) {
+                logger.error('savenow streamDownload failed', { jobId, download_url, error: err.message, status: err.response?.status, data: JSON.stringify(err.response?.data)?.slice(0, 500) });
+                throw err;
+            }
             return;
         }
 
         if (success === 1 && !download_url) {
-            throw new Error(`savenow job finished but no download_url returned. Message: ${pollResp.data.message || ''}`);
+            logger.error('savenow success=1 but no download_url', { jobId, pollData: JSON.stringify(pollResp.data).slice(0, 1000) });
+            throw new Error(`savenow job finished but no download_url returned. Full response: ${JSON.stringify(pollResp.data).slice(0, 500)}`);
+        }
+
+        if (success !== undefined && success !== 0 && success !== 1) {
+            logger.warn('savenow unexpected success value', { jobId, success, pollData: JSON.stringify(pollResp.data).slice(0, 500) });
         }
     }
 }
