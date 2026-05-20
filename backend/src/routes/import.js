@@ -67,6 +67,7 @@ function getYtDlpArgs(args) {
     const bgutilUrl = process.env.YTDLP_BGUTIL_URL || 'http://bgutil-provider:4416';
 
     const finalArgs = [
+        '--js-runtimes', 'node',
         '--extractor-args', `youtubepot-bgutilhttp:base_url=${bgutilUrl}`,
         '--extractor-args', 'youtube:player_client=mweb',
         ...args,

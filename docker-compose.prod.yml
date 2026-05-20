@@ -109,7 +109,7 @@ services:
       - ./backend/temp:/app/temp
       - ./backend/cache:/app/cache
       - ./backend/logs:/app/logs
-      - ./backend/cookies:/app/cookies:ro
+      - ./backend/cookies:/app/cookies
     depends_on:
       postgres:
         condition: service_healthy
