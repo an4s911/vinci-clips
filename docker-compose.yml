@@ -58,13 +58,18 @@ services:
       # Session
       SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret-change-in-production}
 
-      # Gemini
+      # Gemini (analyze / clip selection stage only — not used for transcription)
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       LLM_MODEL: ${LLM_MODEL}
       LLM_FALLBACK_MODELS: ${LLM_FALLBACK_MODELS:-}
-      CHUNK_DURATION_SEC: ${CHUNK_DURATION_SEC:-300}
-      CHUNK_OVERLAP_SEC: ${CHUNK_OVERLAP_SEC:-30}
-      CHUNK_CONCURRENCY: ${CHUNK_CONCURRENCY:-4}
+
+      # whisper.cpp local transcription
+      # Place the model at backend/models/ggml-large-v3-turbo.bin for dev (mounted below).
+      # Install whisper-cli on your host or inside the container separately.
+      WHISPER_BIN: ${WHISPER_BIN:-/usr/local/bin/whisper-cli}
+      WHISPER_MODEL: ${WHISPER_MODEL:-/app/models/ggml-large-v3-turbo.bin}
+      WHISPER_THREADS: ${WHISPER_THREADS:-}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-}
 
       # Redis
       REDIS_HOST: redis
@@ -102,6 +107,7 @@ services:
       - ./backend/temp:/app/temp
       - ./backend/cache:/app/cache
       - ./backend/logs:/app/logs
+      - ./backend/models:/app/models
     depends_on:
       postgres:
         condition: service_healthy

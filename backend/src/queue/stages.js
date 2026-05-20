@@ -29,7 +29,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const Transcript = require('../models/Transcript');
-const { transcribeAudioFile } = require('../utils/audioTranscription');
+const { transcribeAudioFile } = require('../utils/whisperTranscription');
 const { analyzeTranscriptForClips } = require('../utils/clipAnalysis');
 const { extractYouTubeMetadata } = require('../services/youtubeMetadata');
 const { downloadYouTubeVideoSavenow } = require('../services/savenowDownloader');
@@ -493,15 +493,15 @@ const PIPELINE_STAGES = [
         isComplete: t => !!t.videoUrl && !!t.mp3Url,
     },
 
-    // ── Transcribe lane (LLM calls, high latency, internal chunk parallelism)
+    // ── Media lane: whisper.cpp is CPU-bound, same cap as ffmpeg ─────────────
     {
         name: 'transcribe',
-        lane: 'transcribe',
+        lane: 'media',
         run: runTranscribe,
         isComplete: t => Array.isArray(t.transcript) && t.transcript.length > 0,
     },
 
-    // ── Transcribe lane continued (Gemini call, not ffmpeg) ───────────────
+    // ── Transcribe lane: Gemini analyze call (network/LLM, not CPU) ───────
     {
         name: 'analyze',
         lane: 'transcribe',

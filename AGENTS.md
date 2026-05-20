@@ -125,7 +125,7 @@ npm run lint
 3. Backend creates transcript record with `userId: req.user.id`
 4. Backend converts video to MP3 using FFmpeg in background
 5. Media files saved under local backend media directories
-6. Gemini API transcribes audio with word-level timestamps and speaker diarization
+6. **whisper.cpp** transcribes audio locally with word-level timestamps (one word per entry, millisecond precision via DTW alignment)
 7. Transcript data saved to Postgres through Prisma adapter
 8. Frontend displays transcript with video playback (media served from auth-protected `/uploads/*`)
 9. **Caption Generation:** FFmpeg burns styled captions into video clips for social media
@@ -137,15 +137,31 @@ npm run lint
 PORT=8080
 GEMINI_API_KEY=<gemini-api-key>
 LLM_MODEL=gemini-2.5-flash
-CHUNK_DURATION_SEC=180
-CHUNK_OVERLAP_SEC=20
-CHUNK_CONCURRENCY=1
 DATABASE_URL=postgresql://vinci:password@localhost:5432/vinci_clips?schema=public
 SESSION_SECRET=<openssl rand -base64 48>
 REDIS_HOST=localhost
 REDIS_PORT=6379
 REDIS_PASSWORD=<password>
 ```
+
+Note: `CHUNK_DURATION_SEC`, `CHUNK_OVERLAP_SEC`, and `CHUNK_CONCURRENCY` are no longer used — transcription is handled locally by whisper.cpp which processes the full audio in one pass.
+
+### whisper.cpp Transcription Environment Variables
+```
+# Path to whisper-cli binary (default: /usr/local/bin/whisper-cli)
+WHISPER_BIN=/usr/local/bin/whisper-cli
+
+# Path to the GGML model file (default: /app/models/ggml-large-v3-turbo.bin)
+WHISPER_MODEL=/app/models/ggml-large-v3-turbo.bin
+
+# Number of CPU threads to use (default: all available CPUs)
+WHISPER_THREADS=4
+
+# Language hint (default: auto-detect). Set to e.g. "en" to skip language detection.
+WHISPER_LANGUAGE=auto
+```
+
+The binary and model are baked into the Docker image at build time (see `backend/Dockerfile`). `GEMINI_API_KEY` is still required for the **analyze** stage (clip selection) — only the transcribe stage no longer uses it.
 
 For higher transcription usage, use `CHUNK_DURATION_SEC=300`, `CHUNK_OVERLAP_SEC=30`, and `CHUNK_CONCURRENCY=4`.
 

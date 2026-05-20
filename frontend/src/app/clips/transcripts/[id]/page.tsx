@@ -680,7 +680,7 @@ export default function TranscriptDetailPage() {
     };
 
     const hasTranscriptContent = Array.isArray(transcript?.transcript) && transcript.transcript.length > 0;
-    const canRetryContinue = transcript?.status === 'failed';
+    const canRetryContinue = transcript?.status === 'failed' || transcript?.status === 'cancelled';
     const canAnalyzeTranscript = hasTranscriptContent;
     const remainingClipCount = transcript?.clips?.filter((clip, index) => !generatedClips[index] && !isClipGenerating(clip)).length || 0;
 
@@ -829,10 +829,10 @@ export default function TranscriptDetailPage() {
                                 <div className="flex flex-wrap gap-2">
                                     <Button
                                         onClick={generateClips}
-                                        disabled={analyzing || !canAnalyzeTranscript || isAwaitingAnalysis || hasUnrenderedAutoClips}
+                                        disabled={analyzing || transcript?.status === 'analyzing' || !canAnalyzeTranscript || isAwaitingAnalysis || hasUnrenderedAutoClips}
                                         variant="outline"
                                     >
-                                        {analyzing ? 'Analyzing...' : (isAwaitingAnalysis || hasUnrenderedAutoClips) ? 'Auto-generating…' : transcript.clips?.length ? 'Re-analyze Clips' : 'Analyze for Clips'}
+                                        {(analyzing || transcript?.status === 'analyzing') ? 'Analyzing...' : (isAwaitingAnalysis || hasUnrenderedAutoClips) ? 'Auto-generating…' : transcript.clips?.length ? 'Re-analyze Clips' : 'Analyze for Clips'}
                                     </Button>
                                     <Button
                                         onClick={generateRemainingClips}

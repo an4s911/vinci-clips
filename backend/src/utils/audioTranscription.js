@@ -574,6 +574,7 @@ module.exports = {
     getAudioDurationSec,
     getPromotedModelOrder,
     mergeChunkTranscripts,
+    msToTimeString,
     offsetAndFilterWords,
     runChunksWithLimit,
     splitAudio,

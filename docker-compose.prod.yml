@@ -79,9 +79,11 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       LLM_MODEL: ${LLM_MODEL}
       LLM_FALLBACK_MODELS: ${LLM_FALLBACK_MODELS:-}
-      CHUNK_DURATION_SEC: ${CHUNK_DURATION_SEC:-300}
-      CHUNK_OVERLAP_SEC: ${CHUNK_OVERLAP_SEC:-30}
-      CHUNK_CONCURRENCY: ${CHUNK_CONCURRENCY:-4}
+      # whisper.cpp — binary and model baked into image; override only if needed
+      WHISPER_BIN: ${WHISPER_BIN:-/usr/local/bin/whisper-cli}
+      WHISPER_MODEL: ${WHISPER_MODEL:-/app/models/ggml-large-v3-turbo.bin}
+      WHISPER_THREADS: ${WHISPER_THREADS:-}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
