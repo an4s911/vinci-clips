@@ -53,6 +53,18 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider
+    container_name: vinci-clips-bgutil-prod
+    restart: always
+    networks:
+      - vinci-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   backend:
     build:
       context: ./backend
@@ -81,6 +93,7 @@ services:
       MEDIA_ADMIN_TOKEN: ${MEDIA_ADMIN_TOKEN:-}
       YTDLP_COOKIES_PATH: ${YTDLP_COOKIES_PATH:-}
       YTDLP_USER_AGENT: ${YTDLP_USER_AGENT:-}
+      YTDLP_BGUTIL_URL: ${YTDLP_BGUTIL_URL:-http://bgutil-provider:4416}
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       VIDEO_DOWNLOAD_PROVIDER: ${VIDEO_DOWNLOAD_PROVIDER:-ytdlp}
       VIDEO_DOWNLOAD_API_HOST: ${VIDEO_DOWNLOAD_API_HOST:-p.savenow.to}
@@ -96,11 +109,14 @@ services:
       - ./backend/temp:/app/temp
       - ./backend/cache:/app/cache
       - ./backend/logs:/app/logs
+      - ./backend/cookies:/app/cookies:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      bgutil-provider:
+        condition: service_started
     networks:
       - vinci-network
     mem_limit: 10g

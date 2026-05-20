@@ -162,7 +162,10 @@ VIDEO_DOWNLOAD_API_HOST=p.savenow.to
 VIDEO_DOWNLOAD_API_KEY=<savenow-api-key>
 VIDEO_DOWNLOAD_FORMAT=1080
 
-# Optional yt-dlp tuning (ytdlp provider only)
+# yt-dlp bot-detection bypass (ytdlp provider only)
+# bgutil-provider sidecar runs in docker-compose.prod.yml, generates PO tokens automatically
+YTDLP_BGUTIL_URL=http://bgutil-provider:4416
+# Export Firefox cookies (Netscape format), place in backend/cookies/, set path:
 YTDLP_COOKIES_PATH=
 YTDLP_USER_AGENT=
 ```

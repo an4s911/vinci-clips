@@ -62,9 +62,15 @@ const validateUrl = (url) => {
 };
 
 function getYtDlpArgs(args) {
-    const finalArgs = ['--js-runtimes', 'node', ...args];
     const cookiesPath = process.env.YTDLP_COOKIES_PATH;
     const userAgent = process.env.YTDLP_USER_AGENT;
+    const bgutilUrl = process.env.YTDLP_BGUTIL_URL || 'http://bgutil-provider:4416';
+
+    const finalArgs = [
+        '--extractor-args', `youtubepot-bgutilhttp:base_url=${bgutilUrl}`,
+        '--extractor-args', 'youtube:player_client=mweb',
+        ...args,
+    ];
 
     if (cookiesPath) {
         finalArgs.unshift('--cookies', cookiesPath);
