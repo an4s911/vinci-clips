@@ -1,4 +1,11 @@
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function throwIfAborted(signal) {
+    if (signal?.aborted) {
+        const error = new Error('Gemini request cancelled.');
+        error.code = 'JOB_CANCELLED';
+        throw error;
+    }
+}
 
 const DEFAULT_MODEL_CANDIDATES = [
     'gemini-2.5-flash',
@@ -62,6 +69,7 @@ async function generateJsonContent({
     modelCandidates,
     onAttemptEvent,
     retryDelayMs = 1500,
+    signal,
 }) {
     const providedCandidates = Array.isArray(modelCandidates)
         ? [...new Set(modelCandidates.filter(Boolean))]
@@ -75,6 +83,7 @@ async function generateJsonContent({
         attemptedModels.push(modelName);
 
         for (let attempt = 1; attempt <= 2; attempt += 1) {
+            throwIfAborted(signal);
             onAttemptEvent?.({
                 event: 'attempt_started',
                 model: modelName,
@@ -93,7 +102,9 @@ async function generateJsonContent({
                     ...(safetySettings ? { safetySettings } : {})
                 });
 
+                throwIfAborted(signal);
                 const response = await result.response;
+                throwIfAborted(signal);
                 const data = parseJsonResponse(response.text());
                 const success = {
                     event: 'attempt_succeeded',
@@ -124,6 +135,7 @@ async function generateJsonContent({
                         delayMs,
                     });
                     await sleep(delayMs);
+                    throwIfAborted(signal);
                     continue;
                 }
 

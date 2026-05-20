@@ -103,6 +103,27 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
         prevJobsRef.current = jobs;
     }, [jobs, addToast]);
 
+    // On mount: notify about failures that occurred since last login
+    useEffect(() => {
+        const STORAGE_KEY = 'vc:lastSeenFailures';
+        const since = localStorage.getItem(STORAGE_KEY) || '';
+        const nowIso = new Date().toISOString();
+        localStorage.setItem(STORAGE_KEY, nowIso);
+
+        const url = since
+            ? `${API_URL}/clips/transcripts/failures?since=${encodeURIComponent(since)}`
+            : `${API_URL}/clips/transcripts/failures`;
+
+        axios.get(url).then(res => {
+            const failures = Array.isArray(res.data) ? res.data : [];
+            for (const t of failures) {
+                const label = t.originalFilename || 'A video';
+                addToast(`${label} — processing failed`, 'error');
+            }
+        }).catch(() => {/* ignore — user might not be logged in yet */});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // Shared poller: tracks transcript-level jobs
     useEffect(() => {
         const interval = setInterval(async () => {

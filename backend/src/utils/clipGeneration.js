@@ -11,6 +11,7 @@ const {
     assertClipNotCancelled,
     completeClipGeneration,
     markClipPhase,
+    makeStaleResourceError,
     runTrackedCommand,
 } = require('./backgroundJobs');
 const { deleteLocalMedia } = require('./mediaStorage');
@@ -34,7 +35,7 @@ async function generateSingleClipInBackground(transcriptId, clipIndex) {
     let transcript = await Transcript.findById(transcriptId);
     const clip = transcript?.clips?.[clipIndex];
     if (!transcript || !clip) {
-        throw new Error('Clip not found.');
+        throw makeStaleResourceError('Clip not found.');
     }
 
     if (!fs.existsSync(CLIPS_DIR)) {
@@ -143,6 +144,9 @@ async function generateSingleClipInBackground(transcriptId, clipIndex) {
     await assertClipNotCancelled(transcriptId, clipIndex);
     await markClipPhase(transcriptId, clipIndex, 'save-video', 'Saving generated clip.');
     transcript = await Transcript.findById(transcriptId);
+    if (!transcript || !transcript.clips?.[clipIndex]) {
+        throw makeStaleResourceError('Clip no longer exists.');
+    }
     const videoRecord = createClipVideoRecord({
         type: 'generated',
         url: clipUrl,

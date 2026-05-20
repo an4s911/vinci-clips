@@ -14,14 +14,14 @@ const {
 } = require('../utils/clipVideos');
 const { getCoveredTranscriptText } = require('../utils/clipModeration');
 const { getActivePromptBody, renderPrompt } = require('../utils/promptStore');
-const { generateSingleClipInBackground } = require('../utils/clipGeneration');
 const {
     createJobState,
-    requestClipCancel,
-    startClipWorker,
     updateClipActiveJob,
     updateClipGeneration
 } = require('../utils/backgroundJobs');
+const { enqueueClipGenerate } = require('../queue/clipJobs');
+const { cancelClipQueues, removePendingQueueJobs } = require('../queue/cancellation');
+const { deleteLocalMedia } = require('../utils/mediaStorage');
 
 const router = express.Router();
 
@@ -111,20 +111,26 @@ async function queueClipGeneration(transcript, transcriptId, clipIndex) {
         throw error;
     }
 
-    const updatedTranscript = await updateClipGeneration(transcriptId, clipIndex, createJobState({
-        status: 'queued',
-        phase: 'prepare',
-        progressMessage: 'Clip generation queued.',
-    }));
+    let updatedTranscript = transcript;
+    try {
+        updatedTranscript = await updateClipGeneration(transcriptId, clipIndex, createJobState({
+            status: 'queued',
+            phase: 'prepare',
+            progressMessage: 'Clip generation queued.',
+        }));
 
-    // Clear any stale activeJob (leftover reframe/caption render) so the UI doesn't show stale state
-    await updateClipActiveJob(transcriptId, clipIndex, { status: 'completed', completedAt: new Date().toISOString() }).catch(() => {});
+        // Clear any stale activeJob (leftover reframe/caption render) so the UI doesn't show stale state
+        await updateClipActiveJob(transcriptId, clipIndex, { status: 'completed', completedAt: new Date().toISOString() }).catch(() => {});
 
-    const started = startClipWorker(transcriptId, clipIndex, () => generateSingleClipInBackground(transcriptId, clipIndex));
-    if (!started) {
-        const error = new Error('Clip generation is already active for this clip.');
-        error.status = 409;
-        throw error;
+        await enqueueClipGenerate({ transcriptId, clipIndex, origin: 'manual' });
+    } catch (enqueueError) {
+        await updateClipGeneration(transcriptId, clipIndex, {
+            status: 'failed',
+            progressMessage: 'Clip generation could not be queued.',
+            completedAt: new Date().toISOString(),
+            error: enqueueError.message,
+        }).catch(() => {});
+        throw enqueueError;
     }
 
     return updatedTranscript;
@@ -359,13 +365,14 @@ router.post('/:transcriptId/:clipIndex/cancel-generation', async (req, res) => {
             return res.status(409).json({ error: 'Clip generation is not active.' });
         }
 
-        const updatedTranscript = await requestClipCancel(transcriptId, clipIndex);
+        await cancelClipQueues(transcriptId, clipIndex, { types: ['clip-generate'] });
+        const updatedTranscript = await Transcript.findById(transcriptId);
         res.status(200).json({
-            message: 'Clip generation cancellation requested.',
+            message: 'Clip generation cancelled.',
             transcript: updatedTranscript,
         });
     } catch (error) {
-        res.status(500).json({
+        res.status(error.status || 500).json({
             error: 'Failed to cancel clip generation.',
             details: error.message,
         });
@@ -522,6 +529,56 @@ router.post('/:transcriptId/:clipIndex/hook/regenerate', async (req, res) => {
     }
 });
 
+router.delete('/:transcriptId/:clipIndex', async (req, res) => {
+    const { transcriptId } = req.params;
+    const clipIndex = Number.parseInt(req.params.clipIndex, 10);
+
+    try {
+        const transcript = await Transcript.findById(transcriptId);
+        if (!transcript) {
+            return res.status(404).json({ error: 'Transcript not found.' });
+        }
+
+        const normalizedClips = normalizeTranscriptClips(transcript);
+        if (!Number.isInteger(clipIndex) || clipIndex < 0 || clipIndex >= normalizedClips.length) {
+            return res.status(400).json({ error: 'Invalid clip index.' });
+        }
+
+        await cancelClipQueues(transcriptId, clipIndex, { types: ['clip-generate', 'clip-render'] });
+
+        const clip = normalizedClips[clipIndex];
+        const deletedMedia = [];
+        for (const video of clip.videos || []) {
+            try {
+                deletedMedia.push(await deleteLocalMedia(getVideoFilePath(video), { missingOk: true }));
+            } catch (error) {
+                deletedMedia.push(await deleteLocalMedia(video.url, { missingOk: true }));
+            }
+        }
+
+        normalizedClips.splice(clipIndex, 1);
+        await removePendingQueueJobs({ transcriptId, types: ['clip-generate', 'clip-render'] });
+        const updatedTranscript = await Transcript.findByIdAndUpdate(transcriptId, {
+            clips: normalizedClips,
+            analysisMetadata: normalizedClips.length > 0 ? transcript.analysisMetadata : null,
+        });
+        const clips = normalizeTranscriptClips(updatedTranscript);
+
+        res.json({
+            success: true,
+            clips,
+            generatedClips: buildGeneratedClipsMap(clips),
+            deletedMedia: deletedMedia.filter(item => item.deleted).length,
+        });
+    } catch (error) {
+        console.error('Error deleting clip:', error);
+        res.status(error.status || 500).json({
+            error: 'Failed to delete clip.',
+            details: error.message,
+        });
+    }
+});
+
 router.delete('/:transcriptId/:clipIndex/videos/:videoId', async (req, res) => {
     const { transcriptId, videoId } = req.params;
     const clipIndex = Number.parseInt(req.params.clipIndex, 10);
@@ -535,6 +592,11 @@ router.delete('/:transcriptId/:clipIndex/videos/:videoId', async (req, res) => {
         if (!Number.isInteger(clipIndex) || clipIndex < 0 || clipIndex >= (transcript.clips || []).length) {
             return res.status(400).json({ error: 'Invalid clip index.' });
         }
+
+        await cancelClipQueues(transcriptId, clipIndex, {
+            types: ['clip-render'],
+            videoId,
+        });
 
         const updatedTranscript = await deleteClipVideoVersion(Transcript, transcript, clipIndex, videoId);
         if (!updatedTranscript) {

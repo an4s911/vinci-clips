@@ -540,6 +540,7 @@ async function renderCaptionedVideo({
     logger = console,
     prependVideoFilters = [],
     videoDimensions: videoDimensionsOverride = null,
+    onCommand,
 }) {
     const videoDimensions = videoDimensionsOverride || await probeVideoDimensions(inputPath);
     const hookText = typeof hook?.text === 'string' ? hook.text.trim() : '';
@@ -600,7 +601,7 @@ async function renderCaptionedVideo({
     const allVideoFilters = [...prependVideoFilters, ...filters];
 
     await new Promise((resolve, reject) => {
-        ffmpeg(inputPath)
+        const command = ffmpeg(inputPath)
             .videoFilters(allVideoFilters)
             .outputOptions([
                 '-c:v libx264',
@@ -609,9 +610,16 @@ async function renderCaptionedVideo({
                 '-preset medium'
             ])
             .output(outputPath)
-            .on('end', resolve)
-            .on('error', reject)
-            .run();
+            .on('end', () => {
+                onCommand?.(null);
+                resolve();
+            })
+            .on('error', (error) => {
+                onCommand?.(null);
+                reject(error);
+            });
+        onCommand?.(command);
+        command.run();
     });
 
     tempSubtitlePaths.forEach((subtitlePath) => {

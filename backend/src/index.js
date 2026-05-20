@@ -12,6 +12,8 @@ const authRoutes = require('./routes/auth');
 const { loadUser, requireAuth } = require('./middleware/auth');
 const { cleanupLocalMedia, getCleanupConfig } = require('./utils/mediaStorage');
 const { getCookieStatus, sendAlertWebhook, getMonitorConfig } = require('./services/cookieMonitor');
+const { startPipelineWorkers } = require('./queue/workers');
+const { reconcileQueue, startReconcileScheduler } = require('./queue/reconcile');
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -108,6 +110,11 @@ async function startServer() {
     // Auth routes (login is public; logout/me/change-password check auth internally)
     app.use('/clips/auth', authRoutes);
 
+    app.use('/clips', (req, res, next) => {
+        res.set('Cache-Control', 'no-store');
+        next();
+    });
+
     // All other /clips/* routes require authentication
     app.use('/clips', requireAuth, mainRoutes);
 
@@ -119,6 +126,9 @@ async function startServer() {
         app.listen(port, () => {
             logger.info(`Server started successfully on port ${port}`);
         });
+        startPipelineWorkers();
+        await reconcileQueue();
+        startReconcileScheduler();
         startMediaCleanupScheduler();
         startCookieMonitor();
     } catch (error) {

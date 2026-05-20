@@ -21,10 +21,10 @@ const {
 } = require('../utils/clipVideos');
 const {
     activeClipRenderJobs,
-    startClipRenderWorker,
     updateClipActiveJob,
     nowIso,
 } = require('../utils/backgroundJobs');
+const { enqueueClipRender } = require('../queue/clipJobs');
 
 const router = express.Router();
 
@@ -176,59 +176,40 @@ router.post('/render-clip', async (req, res) => {
         const destDir = path.join(__dirname, '..', '..', 'uploads', 'captioned');
         const destPath = path.join(destDir, outputFilename);
 
-        await updateClipActiveJob(transcriptId, parsedClipIndex, {
-            status: 'queued',
-            jobType: 'caption-render',
-            progressMessage: 'Caption render queued.',
-            startedAt: nowIso(),
-            completedAt: null,
-            error: null,
-        });
-
-        startClipRenderWorker(transcriptId, parsedClipIndex, 'caption-render', async () => {
+        try {
             await updateClipActiveJob(transcriptId, parsedClipIndex, {
-                status: 'running',
-                progressMessage: 'Rendering captions…',
-            });
-
-            const freshTranscript = await Transcript.findById(transcriptId);
-            const freshClips = normalizeTranscriptClips(freshTranscript);
-            const freshClip = freshClips[parsedClipIndex];
-            const freshPrimary = getPrimaryClipVideo(freshClip);
-            const freshWords = normalizeTranscriptWords(freshTranscript.transcript);
-            const freshClipWords = buildWordsForClip(freshWords, freshClip, freshPrimary.clipTimeline);
-
-            const result = await renderCaptionedVideo({
-                inputPath,
-                outputPath,
-                transcriptSegments: freshClipWords,
-                styleId: captionStyleId,
-                hookStyleId,
-                captionsEnabled: true,
-                hook: { enabled: hookEnabled, text: effectiveHookText },
-                logger: console,
-            });
-
-            fs.mkdirSync(destDir, { recursive: true });
-            moveFileSafe(outputPath, destPath);
-
-            const videoRecord = createClipVideoRecord({
-                type: 'captioned',
-                url: `/uploads/captioned/${outputFilename}`,
-                filename: outputFilename,
-                captions: { enabled: true, style: result.resolvedStyle.id },
-                hook: { enabled: hookEnabled, text: effectiveHookText, style: hookStyleId || captionStyleId },
-            });
-
-            await appendPrimaryClipVideo(Transcript, freshTranscript, parsedClipIndex, videoRecord);
-
-            await updateClipActiveJob(transcriptId, parsedClipIndex, {
-                status: 'completed',
-                progressMessage: 'Caption render completed.',
-                completedAt: nowIso(),
+                status: 'queued',
+                jobType: 'caption-render',
+                progressMessage: 'Caption render queued.',
+                startedAt: nowIso(),
+                completedAt: null,
                 error: null,
             });
-        });
+
+            await enqueueClipRender({
+                transcriptId,
+                clipIndex: parsedClipIndex,
+                kind: 'caption',
+                payload: {
+                    transcriptId,
+                    parsedClipIndex,
+                    captionStyleId,
+                    hookStyleId,
+                    effectiveHookText,
+                    hookEnabled,
+                    outputFilename,
+                    inputPath,
+                },
+            });
+        } catch (enqueueError) {
+            await updateClipActiveJob(transcriptId, parsedClipIndex, {
+                status: 'failed',
+                progressMessage: 'Caption render could not be queued.',
+                completedAt: nowIso(),
+                error: enqueueError.message,
+            }).catch(() => {});
+            throw enqueueError;
+        }
 
         return res.status(202).json({ accepted: true, transcriptId, clipIndex: parsedClipIndex });
     } catch (error) {
@@ -278,63 +259,64 @@ router.post('/render-batch', async (req, res) => {
 
             try {
                 const inputPath = getVideoFilePath(primaryVideo);
-                const tempDir = path.join(__dirname, '../../temp');
-                fs.mkdirSync(tempDir, { recursive: true });
-
                 const outputFilename = makeTimestampedFilename(transcriptId, clipIndex, '_captioned');
-                const outputPath = path.join(tempDir, outputFilename);
-
                 const effectiveHookText = clip.hook?.text || '';
                 const hookEnabled = Boolean(clip.hook?.enabled && effectiveHookText);
 
                 const words = normalizeTranscriptWords(transcript.transcript);
                 const clipWords = buildWordsForClip(words, clip, primaryVideo.clipTimeline);
-
                 if (clipWords.length === 0) {
                     errors.push({ clipIndex, error: 'No transcript words in clip range' });
                     continue;
                 }
 
-                const result = await renderCaptionedVideo({
-                    inputPath,
-                    outputPath,
-                    transcriptSegments: clipWords,
-                    styleId: captionStyleId,
-                    hookStyleId,
-                    captionsEnabled: true,
-                    hook: { enabled: hookEnabled, text: effectiveHookText },
-                    logger: console,
-                });
+                try {
+                    await updateClipActiveJob(transcriptId, clipIndex, {
+                        status: 'queued',
+                        jobType: 'caption-render',
+                        progressMessage: 'Caption render queued.',
+                        startedAt: nowIso(),
+                        completedAt: null,
+                        error: null,
+                    });
 
-                const destDir = path.join(__dirname, '..', '..', 'uploads', 'captioned');
-                fs.mkdirSync(destDir, { recursive: true });
-                const destPath = path.join(destDir, outputFilename);
-                moveFileSafe(outputPath, destPath);
-
-                const videoRecord = createClipVideoRecord({
-                    type: 'captioned',
-                    url: `/uploads/captioned/${outputFilename}`,
-                    filename: outputFilename,
-                    captions: { enabled: true, style: result.resolvedStyle.id },
-                    hook: { enabled: hookEnabled, text: effectiveHookText, style: hookStyleId || captionStyleId },
-                });
-
-                await appendPrimaryClipVideo(Transcript, transcript, clipIndex, videoRecord);
-                results.push({ clipIndex, video: videoRecord });
+                    await enqueueClipRender({
+                        transcriptId,
+                        clipIndex,
+                        kind: 'caption',
+                        payload: {
+                            transcriptId,
+                            parsedClipIndex: clipIndex,
+                            captionStyleId,
+                            hookStyleId,
+                            effectiveHookText,
+                            hookEnabled,
+                            outputFilename,
+                            inputPath,
+                        },
+                    });
+                } catch (enqueueError) {
+                    await updateClipActiveJob(transcriptId, clipIndex, {
+                        status: 'failed',
+                        progressMessage: 'Caption render could not be queued.',
+                        completedAt: nowIso(),
+                        error: enqueueError.message,
+                    }).catch(() => {});
+                    throw enqueueError;
+                }
+                results.push({ clipIndex, queued: true });
             } catch (clipError) {
                 console.error(`Batch caption render error for clip ${clipIndex}:`, clipError);
                 errors.push({ clipIndex, error: clipError.message });
             }
         }
 
-        const updatedTranscript = await Transcript.findById(transcriptId, { userId: req.user.id });
         res.json({
             success: true,
-            rendered: results.length,
+            queued: results.length,
             failed: errors.length,
             results,
             errors,
-            clips: updatedTranscript?.clips,
         });
     } catch (error) {
         console.error('Batch caption render error:', error);

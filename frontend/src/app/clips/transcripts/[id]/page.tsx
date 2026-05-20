@@ -129,10 +129,11 @@ interface Transcript {
     mp3Url?: string;
     clips: Clip[];
     createdAt: string;
-    status?: 'uploading' | 'converting' | 'transcribing' | 'completed' | 'failed';
+    status?: string;
     platform?: string | null;
     failureReason?: string | null;
     failedAt?: string | null;
+    failedStage?: string | null;
     processingJob?: ProcessingJob | null;
     analysisMetadata?: {
         filteredClipCount?: number;
@@ -151,6 +152,7 @@ export default function TranscriptDetailPage() {
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
     const [analyzing, setAnalyzing] = useState(false);
+    const [clearingClips, setClearingClips] = useState(false);
     const [generatingClips, setGeneratingClips] = useState<{[key: number]: boolean}>({});
     const [generatedClips, setGeneratedClips] = useState<NonNullable<Transcript['generatedClips']>>({});
     const [deletingVersions, setDeletingVersions] = useState<{[key: string]: boolean}>({});
@@ -202,7 +204,7 @@ export default function TranscriptDetailPage() {
     const isTranscriptProcessing = (value: Transcript | null) => (
         value?.processingJob
             ? ['queued', 'running', 'cancelling'].includes(value.processingJob.status)
-            : Boolean(value?.status && ['uploading', 'converting', 'transcribing'].includes(value.status))
+            : Boolean(value?.status && ['uploading', 'downloading', 'converting', 'transcribing', 'analyzing', 'generating'].includes(value.status))
     );
 
     const isClipGenerating = (clip?: Clip) => Boolean(
@@ -297,10 +299,13 @@ export default function TranscriptDetailPage() {
             'extract-metadata': 'Extracting metadata',
             'download-video': 'Downloading video',
             'probe-duration': 'Reading duration',
+            'thumbnail': 'Generating thumbnail',
             'convert-mp3': 'Converting audio',
             'persist-files': 'Saving files',
             'upload-gemini': 'Uploading audio',
             transcribe: 'Transcribing',
+            analyze: 'Analyzing for clips',
+            clips: 'Generating clips',
             prepare: 'Preparing',
             'cut-segment': 'Cutting segment',
             'stitch-segments': 'Stitching segments',
@@ -398,19 +403,23 @@ export default function TranscriptDetailPage() {
     };
 
     const clearAnalyzedClips = async () => {
-        if (!transcript) return;
+        if (!transcript || clearingClips) return;
         
+        setClearingClips(true);
+        setError('');
         try {
-            // Update transcript to remove clips
-            const updatedTranscript = { ...transcript, clips: [] };
-            await axios.put(`${API_URL}/clips/transcripts/${transcript._id}`, {
-                clips: []
-            });
-            setTranscript(updatedTranscript);
+            const response = await axios.delete(`${API_URL}/clips/transcripts/${transcript._id}/clips`);
+            if (response.data?.transcript) {
+                setTranscript(response.data.transcript);
+            } else {
+                await fetchTranscript();
+            }
             setGeneratedClips({});
-        } catch (err) {
-            setError('Failed to clear clips. Please try again.');
+        } catch (err: unknown) {
+            setError(getApiErrorMessage(err, 'Failed to clear clips. Please try again.', true));
             console.error(err);
+        } finally {
+            setClearingClips(false);
         }
     };
 
@@ -622,7 +631,7 @@ export default function TranscriptDetailPage() {
         return parts.join(' · ');
     };
 
-    const retryTranscription = async () => {
+    const retryContinue = async () => {
         if (!transcript || retryingTranscript) return;
 
         setRetryingTranscript(true);
@@ -633,14 +642,14 @@ export default function TranscriptDetailPage() {
             await axios.post(`${API_URL}/clips/retry/${transcript._id}`);
             await fetchTranscript();
         } catch (err: unknown) {
-            setError(getApiErrorMessage(err, 'Failed to retry transcription.', true));
+            setError(getApiErrorMessage(err, 'Failed to retry processing.', true));
         } finally {
             setRetryingTranscript(false);
         }
     };
 
     const hasTranscriptContent = Array.isArray(transcript?.transcript) && transcript.transcript.length > 0;
-    const canRetryTranscription = transcript?.status === 'failed' && !hasTranscriptContent && Boolean(transcript.mp3Url);
+    const canRetryContinue = transcript?.status === 'failed';
     const canAnalyzeTranscript = hasTranscriptContent;
     const remainingClipCount = transcript?.clips?.filter((clip, index) => !generatedClips[index] && !isClipGenerating(clip)).length || 0;
 
@@ -678,7 +687,7 @@ export default function TranscriptDetailPage() {
                                 {notice}
                             </div>
                         )}
-                        {canRetryTranscription && (
+                        {canRetryContinue && (
                             <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-red-900">
                                 <div className="flex items-start gap-3">
                                     <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
@@ -686,13 +695,17 @@ export default function TranscriptDetailPage() {
                                         <div>
                                             <p className="font-semibold">
                                                 {transcript.processingJob?.status === 'cancelled'
-                                                    ? 'Transcription was cancelled.'
-                                                    : 'Video import/download succeeded, but transcription failed.'}
+                                                    ? 'Processing was cancelled.'
+                                                    : transcript.failedStage
+                                                        ? `Failed at: ${formatPhase(transcript.failedStage)}`
+                                                        : 'Processing failed.'}
                                             </p>
-                                            <p className="text-sm">{transcript.failureReason || 'Retry transcription to try again.'}</p>
+                                            <p className="text-sm mt-1">
+                                                {transcript.failureReason || 'An error occurred during processing.'}
+                                            </p>
                                         </div>
-                                        <Button onClick={retryTranscription} disabled={retryingTranscript}>
-                                            {retryingTranscript ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</> : 'Retry Transcription'}
+                                        <Button onClick={retryContinue} disabled={retryingTranscript}>
+                                            {retryingTranscript ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</> : 'Retry and continue'}
                                         </Button>
                                     </div>
                                 </div>
@@ -799,11 +812,11 @@ export default function TranscriptDetailPage() {
                                     </Button>
                                     <Button
                                         onClick={clearAnalyzedClips}
-                                        disabled={!canAnalyzeTranscript || !transcript?.clips || transcript.clips.length === 0}
+                                        disabled={clearingClips || !canAnalyzeTranscript || !transcript?.clips || transcript.clips.length === 0}
                                         variant="destructive"
                                         size="sm"
                                     >
-                                        Clear Clips
+                                        {clearingClips ? 'Clearing...' : 'Clear Clips'}
                                     </Button>
                                 </div>
                             </div>

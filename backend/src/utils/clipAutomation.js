@@ -1,13 +1,12 @@
 const Transcript = require('../models/Transcript');
 const { analyzeTranscriptForClips } = require('./clipAnalysis');
-const { generateSingleClipInBackground } = require('./clipGeneration');
 const { getPrimaryClipVideo, normalizeTranscriptClips } = require('./clipVideos');
 const {
     createJobState,
     logVideoProcessing,
-    startClipWorker,
     updateClipGeneration,
 } = require('./backgroundJobs');
+const { enqueueClipGenerate } = require('../queue/clipJobs');
 
 function rankClipIndexes(clips) {
     return clips
@@ -37,10 +36,8 @@ async function queueAutoClipGeneration(transcriptId) {
             phase: 'prepare',
             progressMessage: 'Clip generation queued automatically.',
         }));
-        const started = startClipWorker(transcriptId, clipIndex, () => generateSingleClipInBackground(transcriptId, clipIndex));
-        if (started) {
-            queuedClipIndexes.push(clipIndex);
-        }
+        await enqueueClipGenerate({ transcriptId, clipIndex, origin: 'pipeline' });
+        queuedClipIndexes.push(clipIndex);
     }
 
     return queuedClipIndexes;

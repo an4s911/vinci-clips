@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { useRouter } from 'next/navigation';
 import { useJobs } from '@/components/JobsProvider';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -45,7 +44,7 @@ interface Transcript {
   _id: string;
   originalFilename: string;
   createdAt: string;
-  status?: 'uploading' | 'converting' | 'transcribing' | 'completed' | 'failed';
+  status?: 'uploading' | 'downloading' | 'converting' | 'transcribing' | 'analyzing' | 'generating' | 'completed' | 'failed' | 'cancelled';
   duration?: number;
   thumbnailUrl?: string;
   mp3Url?: string | null;
@@ -56,7 +55,6 @@ interface Transcript {
 }
 
 export default function UploadClient() {
-  const router = useRouter();
   const { enqueueJob } = useJobs();
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -65,7 +63,7 @@ export default function UploadClient() {
   const [recentTranscripts, setRecentTranscripts] = useState<Transcript[]>([]);
   const [loadingTranscripts, setLoadingTranscripts] = useState(true);
   const [importUrl, setImportUrl] = useState('');
-  const [importMode, setImportMode] = useState<'file' | 'url'>('file');
+  const [importMode, setImportMode] = useState<'file' | 'url'>('url');
   const [isPolling, setIsPolling] = useState(false);
   const [retryingIds, setRetryingIds] = useState<Record<string, boolean>>({});
   const [cancellingIds, setCancellingIds] = useState<Record<string, boolean>>({});
@@ -75,7 +73,7 @@ export default function UploadClient() {
   const isTranscriptProcessing = (transcript: Transcript) => (
     transcript.processingJob
       ? ['queued', 'running', 'cancelling'].includes(transcript.processingJob.status)
-      : Boolean(transcript.status && !['completed', 'failed'].includes(transcript.status))
+      : Boolean(transcript.status && !['completed', 'failed', 'cancelled'].includes(transcript.status))
   );
 
   useEffect(() => {
@@ -124,8 +122,11 @@ export default function UploadClient() {
       case 'failed':
         return <AlertCircle className="h-4 w-4 text-red-500" />;
       case 'uploading':
+      case 'downloading':
       case 'converting':
       case 'transcribing':
+      case 'analyzing':
+      case 'generating':
         return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
       default:
         if (status === 'cancelled') {
@@ -143,8 +144,11 @@ export default function UploadClient() {
     
     const statusConfig = {
       uploading: { label: 'Uploading', variant: 'secondary' as const },
+      downloading: { label: 'Downloading', variant: 'secondary' as const },
       converting: { label: 'Converting', variant: 'secondary' as const },
       transcribing: { label: 'Transcribing', variant: 'secondary' as const },
+      analyzing: { label: 'Analyzing', variant: 'secondary' as const },
+      generating: { label: 'Generating clips', variant: 'secondary' as const },
       completed: { label: 'Ready', variant: 'default' as const },
       failed: { label: 'Failed', variant: 'destructive' as const },
     };
@@ -223,10 +227,8 @@ export default function UploadClient() {
       const transcriptId = response.data?.transcript?._id;
       if (transcriptId) {
         enqueueJob({ id: crypto.randomUUID(), kind: 'transcript', label: file.name, transcriptId, status: 'running', createdAt: Date.now() });
-        router.push(`/clips/transcripts/${transcriptId}`);
-        return;
       }
-      setMessage(response.data?.message || 'Upload accepted. Processing in background.');
+      setMessage('File added to queue. Processing in background.');
       const refreshResponse = await axios.get(`${API_URL}/clips/transcripts`);
       setRecentTranscripts(refreshResponse.data.slice(0, 6));
       setIsPolling(true);
@@ -258,11 +260,8 @@ export default function UploadClient() {
       const transcriptId = response.data?.transcript?._id;
       if (transcriptId) {
         enqueueJob({ id: crypto.randomUUID(), kind: 'transcript', label: importUrl.trim(), transcriptId, status: 'running', createdAt: Date.now() });
-        router.push(`/clips/transcripts/${transcriptId}`);
-        return;
       }
-
-      setMessage(response.data?.message || 'Import accepted. Processing in background.');
+      setMessage('URL added to queue. Processing in background.');
       setImportUrl('');
 
       const refreshResponse = await axios.get(`${API_URL}/clips/transcripts`);
@@ -311,9 +310,9 @@ export default function UploadClient() {
       setRecentTranscripts(prev => prev.filter(t => t._id !== confirmDelete.id));
       setMessage('Video deleted successfully');
       setConfirmDelete(null);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error deleting video:', error);
-      setMessage('Failed to delete video');
+      setMessage(getErrorMessage(error, 'Failed to delete video.', true));
     } finally {
       setIsDeleting(false);
     }
@@ -328,17 +327,12 @@ export default function UploadClient() {
 
     try {
       await axios.post(`${API_URL}/clips/retry/${id}`);
-      setMessage('Transcription retry completed. Refreshing transcript status...');
+      setMessage('Retry queued. Processing will resume from the failed stage.');
       const refreshResponse = await axios.get(`${API_URL}/clips/transcripts`);
       setRecentTranscripts(refreshResponse.data.slice(0, 6));
       setIsPolling(true);
     } catch (error: unknown) {
-      const status = (error as {response?: {status?: number}})?.response?.status;
-      if (status === 400) {
-        setMessage('Cannot retry transcription — the video file was not saved. Delete this entry and re-import the video.');
-      } else {
-        setMessage(getErrorMessage(error, 'Failed to retry transcription.', true));
-      }
+      setMessage(getErrorMessage(error, 'Failed to retry processing.', true));
     } finally {
       setRetryingIds(prev => ({ ...prev, [id]: false }));
     }
@@ -357,20 +351,20 @@ export default function UploadClient() {
               {/* Mode Selection */}
               <div className="flex gap-2 mb-6">
                 <Button
-                  variant={importMode === 'file' ? 'default' : 'outline'}
-                  onClick={() => setImportMode('file')}
-                  className="flex items-center gap-2"
-                >
-                  <UploadCloud className="h-4 w-4" />
-                  Upload File
-                </Button>
-                <Button
                   variant={importMode === 'url' ? 'default' : 'outline'}
                   onClick={() => setImportMode('url')}
                   className="flex items-center gap-2"
                 >
                   <LinkIcon className="h-4 w-4" />
                   Import URL
+                </Button>
+                <Button
+                  variant={importMode === 'file' ? 'default' : 'outline'}
+                  onClick={() => setImportMode('file')}
+                  className="flex items-center gap-2"
+                >
+                  <UploadCloud className="h-4 w-4" />
+                  Upload File
                 </Button>
               </div>
 
@@ -525,7 +519,7 @@ export default function UploadClient() {
                             className="w-full"
                             disabled={retryingIds[transcript._id]}
                           >
-                            {retryingIds[transcript._id] ? 'Retrying...' : 'Retry Transcription'}
+                            {retryingIds[transcript._id] ? 'Retrying...' : 'Retry and continue'}
                           </Button>
                         )}
                       </div>

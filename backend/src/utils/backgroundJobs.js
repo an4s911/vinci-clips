@@ -7,6 +7,22 @@ const activeTranscriptJobs = new Map();
 const activeClipJobs = new Map();
 const activeClipRenderJobs = new Map();
 
+function makeCancelledError(message = 'Processing cancelled.') {
+    const error = new Error(message);
+    error.code = 'JOB_CANCELLED';
+    return error;
+}
+
+function makeStaleResourceError(message = 'Resource no longer exists.') {
+    const error = new Error(message);
+    error.code = 'STALE_RESOURCE';
+    return error;
+}
+
+function isNonRetryableQueueError(error) {
+    return ['JOB_CANCELLED', 'STALE_RESOURCE'].includes(error?.code);
+}
+
 function buildTranscriptionPrompt() {
     return "Transcribe this audio with word-level timestamps. All timestamps must be relative to the start of this audio — the first sample is 00:00:000. " +
         "Return a JSON array of objects, each with 'start' (MM:SS:mmm), 'end' (MM:SS:mmm), and 'text' (one word). " +
@@ -49,8 +65,11 @@ function createJobState({ status = 'queued', phase, progressMessage, error = nul
 }
 
 function transcriptStatusForPhase(phase, fallback = 'uploading') {
-    if (phase === 'convert-mp3' || phase === 'persist-files' || phase === 'thumbnail') return 'converting';
-    if (phase === 'upload-gemini' || phase === 'transcribe' || phase === 'resolve-mp3' || phase === 'probe-audio-duration' || phase === 'split-audio' || phase === 'merge-transcript') return 'transcribing';
+    if (['extract-metadata', 'download-video'].includes(phase)) return 'downloading';
+    if (['probe-duration', 'convert-mp3', 'persist-files', 'thumbnail'].includes(phase)) return 'converting';
+    if (['upload-gemini', 'transcribe', 'resolve-mp3', 'probe-audio-duration', 'split-audio', 'merge-transcript'].includes(phase)) return 'transcribing';
+    if (phase === 'analyze') return 'analyzing';
+    if (phase === 'clips') return 'generating';
     if (phase === 'completed') return 'completed';
     return fallback;
 }
@@ -77,8 +96,10 @@ async function updateTranscriptJob(transcriptId, updates = {}, metadata = {}) {
     if (updates.phase || updates.status) {
         if (processingJob.status === 'completed') {
             payload.status = 'completed';
-        } else if (processingJob.status === 'failed' || processingJob.status === 'cancelled') {
+        } else if (processingJob.status === 'failed') {
             payload.status = 'failed';
+        } else if (processingJob.status === 'cancelled') {
+            payload.status = 'cancelled';
         } else {
             payload.status = transcriptStatusForPhase(processingJob.phase, transcript.status || 'uploading');
         }
@@ -146,15 +167,16 @@ async function isTranscriptCancelRequested(transcriptId) {
 
 async function assertTranscriptNotCancelled(transcriptId, jobType) {
     if (await isTranscriptCancelRequested(transcriptId)) {
-        const error = new Error('Processing cancelled.');
-        error.code = 'JOB_CANCELLED';
         logVideoProcessing(transcriptId, 'cancelled', 'Transcript processing cancelled before next phase', { jobType });
-        throw error;
+        throw makeCancelledError('Processing cancelled.');
     }
 }
 
 async function requestTranscriptCancel(transcriptId) {
     const job = activeTranscriptJobs.get(transcriptId);
+    if (job?.abortController && !job.abortController.signal.aborted) {
+        job.abortController.abort();
+    }
     if (job?.child && !job.child.killed) {
         job.child.kill('SIGTERM');
         logVideoProcessing(transcriptId, 'cancelling', 'Cancellation requested; stopped active subprocess', {
@@ -186,6 +208,101 @@ async function finalizeTranscriptCancelled(transcriptId, jobType) {
         processingJob: updated?.processingJob,
         status: updated?.status,
     });
+}
+
+function getActiveTranscriptJob(transcriptId) {
+    return activeTranscriptJobs.get(transcriptId) || null;
+}
+
+function getActiveClipJob(transcriptId, clipIndex) {
+    return activeClipJobs.get(`${transcriptId}:${clipIndex}`) || null;
+}
+
+function getActiveClipRenderJob(transcriptId, clipIndex) {
+    return activeClipRenderJobs.get(`render:${transcriptId}:${clipIndex}`) || null;
+}
+
+function hasActiveTranscriptWork(transcriptId) {
+    return activeTranscriptJobs.has(transcriptId)
+        || [...activeClipJobs.keys()].some(key => key.startsWith(`${transcriptId}:`))
+        || [...activeClipRenderJobs.keys()].some(key => key.startsWith(`render:${transcriptId}:`));
+}
+
+function hasActiveClipWork(transcriptId, clipIndex) {
+    return activeClipJobs.has(`${transcriptId}:${clipIndex}`)
+        || activeClipRenderJobs.has(`render:${transcriptId}:${clipIndex}`);
+}
+
+function stopActiveTranscriptWork(transcriptId) {
+    const stopped = [];
+    const transcriptJob = activeTranscriptJobs.get(transcriptId);
+    if (transcriptJob) {
+        stopActiveEntry(transcriptJob);
+        stopped.push({ type: 'transcript', phase: transcriptJob.phase });
+    }
+
+    for (const [key, job] of activeClipJobs.entries()) {
+        if (!key.startsWith(`${transcriptId}:`)) continue;
+        stopActiveEntry(job);
+        stopped.push({ type: 'clip-generate', clipIndex: job.clipIndex, phase: job.phase });
+    }
+
+    for (const [key, job] of activeClipRenderJobs.entries()) {
+        if (!key.startsWith(`render:${transcriptId}:`)) continue;
+        stopActiveEntry(job);
+        stopped.push({ type: 'clip-render', clipIndex: job.clipIndex, phase: job.phase || job.kind });
+    }
+
+    return stopped;
+}
+
+function stopActiveClipWork(transcriptId, clipIndex) {
+    const stopped = [];
+    const clipJob = activeClipJobs.get(`${transcriptId}:${clipIndex}`);
+    if (clipJob) {
+        stopActiveEntry(clipJob);
+        stopped.push({ type: 'clip-generate', clipIndex, phase: clipJob.phase });
+    }
+
+    const renderJob = activeClipRenderJobs.get(`render:${transcriptId}:${clipIndex}`);
+    if (renderJob) {
+        stopActiveEntry(renderJob);
+        stopped.push({ type: 'clip-render', clipIndex, phase: renderJob.phase || renderJob.kind });
+    }
+
+    return stopped;
+}
+
+function stopActiveEntry(job) {
+    if (job?.abortController && !job.abortController.signal.aborted) {
+        job.abortController.abort();
+    }
+    if (job?.child && !job.child.killed) {
+        job.child.kill('SIGTERM');
+    }
+    if (job?.ffmpegCommand) {
+        try { job.ffmpegCommand.kill('SIGTERM'); } catch {}
+    }
+}
+
+function ensureActiveAbortController(transcriptId, clipIndex) {
+    const isClip = Number.isInteger(clipIndex);
+    const key = isClip ? `${transcriptId}:${clipIndex}` : transcriptId;
+    const activeMap = isClip ? activeClipJobs : activeTranscriptJobs;
+    const job = activeMap.get(key);
+    if (!job) return null;
+    if (!job.abortController) {
+        job.abortController = new AbortController();
+    }
+    return job.abortController;
+}
+
+function setActiveClipRenderCommand(transcriptId, clipIndex, ffmpegCommand) {
+    const key = `render:${transcriptId}:${clipIndex}`;
+    const job = activeClipRenderJobs.get(key);
+    if (job) {
+        job.ffmpegCommand = ffmpegCommand || null;
+    }
 }
 
 function runTrackedCommand({ transcriptId, clipIndex, jobType, phase, command, options = {} }) {
@@ -354,6 +471,9 @@ async function markClipPhase(transcriptId, clipIndex, phase, progressMessage, ex
 async function requestClipCancel(transcriptId, clipIndex) {
     const key = `${transcriptId}:${clipIndex}`;
     const job = activeClipJobs.get(key);
+    if (job?.abortController && !job.abortController.signal.aborted) {
+        job.abortController.abort();
+    }
     if (job?.child && !job.child.killed) {
         job.child.kill('SIGTERM');
     }
@@ -374,9 +494,7 @@ async function isClipCancelRequested(transcriptId, clipIndex) {
 
 async function assertClipNotCancelled(transcriptId, clipIndex) {
     if (await isClipCancelRequested(transcriptId, clipIndex)) {
-        const error = new Error('Clip generation cancelled.');
-        error.code = 'JOB_CANCELLED';
-        throw error;
+        throw makeCancelledError('Clip generation cancelled.');
     }
 }
 
@@ -491,6 +609,15 @@ module.exports = {
     activeClipJobs,
     activeClipRenderJobs,
     activeTranscriptJobs,
+    ensureActiveAbortController,
+    getActiveClipJob,
+    getActiveClipRenderJob,
+    getActiveTranscriptJob,
+    hasActiveClipWork,
+    hasActiveTranscriptWork,
+    isNonRetryableQueueError,
+    makeCancelledError,
+    makeStaleResourceError,
     startClipRenderWorker,
     updateClipActiveJob,
     assertClipNotCancelled,
@@ -512,6 +639,9 @@ module.exports = {
     resolveLocalUploadPath,
     runTrackedCommand,
     runTrackedFile,
+    setActiveClipRenderCommand,
+    stopActiveClipWork,
+    stopActiveTranscriptWork,
     startClipWorker,
     startTranscriptWorker,
     updateClipGeneration,

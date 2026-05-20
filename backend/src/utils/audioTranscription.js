@@ -6,6 +6,7 @@ const { generateJsonContent, getModelCandidates } = require('./gemini');
 const {
     TRANSCRIPTION_SCHEMA,
     assertTranscriptNotCancelled,
+    ensureActiveAbortController,
     logVideoProcessing,
     runTrackedCommand,
 } = require('./backgroundJobs');
@@ -178,11 +179,13 @@ function logGeminiAttemptEvent({ transcriptId, jobType, chunkIndex, chunkCount, 
     }
 }
 
-async function transcribeChunk({ genAI, fileManager, chunkPath, transcriptId, logLabel, modelCandidates, onAttemptEvent }) {
+async function transcribeChunk({ genAI, fileManager, chunkPath, transcriptId, logLabel, modelCandidates, onAttemptEvent, signal }) {
+    if (signal?.aborted) throw Object.assign(new Error('Transcription cancelled.'), { code: 'JOB_CANCELLED' });
     const uploadResult = await fileManager.uploadFile(chunkPath, {
         mimeType: 'audio/mpeg',
         displayName: path.basename(chunkPath),
     });
+    if (signal?.aborted) throw Object.assign(new Error('Transcription cancelled.'), { code: 'JOB_CANCELLED' });
     const audioPart = { fileData: { mimeType: uploadResult.file.mimeType, fileUri: uploadResult.file.uri } };
     const { data, model, attempts } = await generateJsonContent({
         genAI,
@@ -197,6 +200,7 @@ async function transcribeChunk({ genAI, fileManager, chunkPath, transcriptId, lo
             ],
         }],
         responseSchema: TRANSCRIPTION_SCHEMA,
+        signal,
     });
 
     if (!Array.isArray(data)) {
@@ -429,6 +433,8 @@ async function transcribeAudioFile({
     const config = getChunkConfig();
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY);
+    const abortController = ensureActiveAbortController(transcriptId);
+    const signal = abortController?.signal;
     const chunkDir = path.join(path.dirname(mp3Path), `${path.basename(mp3Path, path.extname(mp3Path))}-chunks-${Date.now()}-${process.pid}`);
     let chunks = [];
 
@@ -451,6 +457,7 @@ async function transcribeAudioFile({
                 chunkPath: mp3Path,
                 transcriptId,
                 logLabel,
+                signal,
             });
 
             await assertTranscriptNotCancelled(transcriptId, jobType);
@@ -476,6 +483,7 @@ async function transcribeAudioFile({
             await assertTranscriptNotCancelled(transcriptId, jobType);
             const chunkModelOrder = [...modelOrder];
             try {
+                if (signal?.aborted) throw Object.assign(new Error('Transcription cancelled.'), { code: 'JOB_CANCELLED' });
                 logVideoProcessing(transcriptId, 'running', 'Gemini chunk transcription started', {
                     jobType,
                     phase: 'transcribe',
@@ -490,6 +498,7 @@ async function transcribeAudioFile({
                     transcriptId,
                     logLabel: `${logLabel} chunk ${chunk.index + 1}/${chunks.length}`,
                     modelCandidates: chunkModelOrder,
+                    signal,
                     onAttemptEvent: (event) => logGeminiAttemptEvent({
                         transcriptId,
                         jobType,

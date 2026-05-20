@@ -1,58 +1,12 @@
 const express = require('express');
 const Transcript = require('../models/Transcript');
-const fs = require('fs');
-const path = require('path');
-const { transcribeAudioFile } = require('../utils/audioTranscription');
-const {
-    assertTranscriptNotCancelled,
-    completeTranscriptJob,
-    createJobState,
-    isTranscriptCancelRequested,
-    logVideoProcessing,
-    markTranscriptPhase,
-    resolveLocalUploadPath,
-    startTranscriptWorker,
-} = require('../utils/backgroundJobs');
-const { analyzeAndAutoGenerateClips } = require('../utils/clipAutomation');
-const { classifyTranscriptionFailure } = require('../utils/failureMessages');
+const { logVideoProcessing } = require('../utils/backgroundJobs');
+const { enqueuePipeline } = require('../queue/pipeline');
 
 const router = express.Router();
 
-const hasTranscriptContent = (transcript) => Array.isArray(transcript?.transcript) && transcript.transcript.length > 0;
-
-async function runRetryTranscription(transcriptId, mp3Path) {
-    const jobType = 'retry-transcription';
-
-    await assertTranscriptNotCancelled(transcriptId, jobType);
-    await markTranscriptPhase(transcriptId, jobType, 'resolve-mp3', 'Resolved saved MP3 for retry.', {
-        mp3FileName: path.basename(mp3Path),
-    });
-
-    await assertTranscriptNotCancelled(transcriptId, jobType);
-    const result = await transcribeAudioFile({
-        mp3Path,
-        transcriptId,
-        jobType,
-        logLabel: `Retry transcription for ${transcriptId}`,
-        onPhaseChange: (phase, message, extra = {}) => markTranscriptPhase(transcriptId, jobType, phase, message, extra),
-    });
-
-    await assertTranscriptNotCancelled(transcriptId, jobType);
-    await Transcript.findByIdAndUpdate(transcriptId, {
-        transcript: result.transcript,
-        failureReason: null,
-        failedAt: null,
-    });
-    logVideoProcessing(transcriptId, 'completed', 'Retry transcription completed', {
-        jobType,
-        phase: 'transcribe',
-        model: result.model,
-        wordCount: Array.isArray(result.transcript) ? result.transcript.length : null,
-    });
-    await completeTranscriptJob(transcriptId, jobType, 'Transcription retry completed.');
-    await analyzeAndAutoGenerateClips(transcriptId);
-}
-
+// POST /clips/retry/:transcriptId  — retry the pipeline from the failed stage.
+// Works for any failed stage (download, convert, transcribe, clips, etc.).
 router.post('/:transcriptId', async (req, res) => {
     const { transcriptId } = req.params;
 
@@ -63,84 +17,38 @@ router.post('/:transcriptId', async (req, res) => {
         }
 
         if (transcript.processingJob && ['queued', 'running', 'cancelling'].includes(transcript.processingJob.status)) {
-            return res.status(409).json({ error: 'Transcript processing is already active.' });
+            return res.status(409).json({ error: 'Processing is already active for this transcript.' });
         }
 
         if (transcript.status === 'completed') {
-            return res.status(400).json({
-                error: 'Transcript already completed',
-                details: 'Retry is only available before a transcript has been successfully created.',
-            });
+            return res.status(400).json({ error: 'Transcript already completed. Nothing to retry.' });
         }
 
-        if (hasTranscriptContent(transcript)) {
-            return res.status(400).json({
-                error: 'Transcript already has content',
-                details: 'Retry is only available when no transcript content has been saved yet.',
-            });
-        }
+        // Determine which stage to resume from.
+        // Use the recorded failedStage if available, otherwise fall back to the
+        // first stage that is not yet complete.
+        const jobType = transcript.importUrl ? 'import' : 'upload';
+        const fromStage = transcript.failedStage || (jobType === 'import' ? 'extract-metadata' : 'probe-duration');
 
-        if (!transcript.mp3Url) {
-            return res.status(400).json({
-                error: 'No MP3 available',
-                details: 'This video cannot be retried because no MP3 file was saved for it.',
-            });
-        }
-
-        const mp3Path = resolveLocalUploadPath(transcript.mp3Url);
-        if (!mp3Path || !fs.existsSync(mp3Path)) {
-            return res.status(400).json({
-                error: 'No MP3 available',
-                details: 'The saved MP3 file could not be found on disk for this transcript.',
-            });
-        }
-
-        const updatedTranscript = await Transcript.findByIdAndUpdate(transcriptId, {
-            status: 'transcribing',
-            processingJob: createJobState({
-                status: 'running',
-                phase: 'resolve-mp3',
-                progressMessage: 'Starting transcription retry.',
-            }),
-            failureReason: null,
-            failedAt: null,
+        logVideoProcessing(transcriptId, 'accepted', 'Retry-continue accepted', {
+            jobType,
+            fromStage,
+            previousFailedStage: transcript.failedStage,
         });
 
-        logVideoProcessing(transcriptId, 'accepted', 'Transcription retry accepted', {
-            jobType: 'retry-transcription',
-            phase: 'resolve-mp3',
-            mp3FileName: path.basename(mp3Path),
-        });
+        await enqueuePipeline(transcriptId, jobType, fromStage);
 
-        startTranscriptWorker(transcriptId, 'retry-transcription', async () => {
-            try {
-                await runRetryTranscription(transcriptId, mp3Path);
-            } catch (error) {
-                if (error?.code === 'JOB_CANCELLED' || await isTranscriptCancelRequested(transcriptId)) {
-                    throw error;
-                }
-                const failure = classifyTranscriptionFailure(error);
-                error.publicCode = failure.code;
-                error.publicMessage = failure.message;
-                await Transcript.findByIdAndUpdate(transcriptId, {
-                    failureReason: failure.message,
-                    failedAt: new Date().toISOString(),
-                });
-                throw error;
-            }
-        });
-
+        const updated = await Transcript.findById(transcriptId);
         res.status(202).json({
-            message: 'Transcription retry accepted. Processing continues in the background.',
-            transcript: updatedTranscript,
+            message: 'Processing retry accepted. Resuming from failed stage.',
+            transcript: updated,
         });
     } catch (error) {
-        logVideoProcessing(transcriptId, 'failed', 'Transcription retry failed before it could start', {
-            jobType: 'retry-transcription',
+        logVideoProcessing(transcriptId, 'failed', 'Retry-continue failed before it could start', {
             error: error.message,
         });
         res.status(500).json({
-            error: 'Failed to retry transcription.',
+            error: 'Failed to retry processing.',
             details: error.message,
         });
     }

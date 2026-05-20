@@ -33,6 +33,7 @@ model Transcript {
   status           String    @default("uploading")
   failureReason    String?
   failedAt         DateTime?
+  failedStage      String?
   platform         String?
   externalVideoId  String?
   importUrl        String?

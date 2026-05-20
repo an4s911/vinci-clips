@@ -23,10 +23,10 @@ const {
 const { deleteLocalMedia } = require('../utils/mediaStorage');
 const {
     activeClipRenderJobs,
-    startClipRenderWorker,
     updateClipActiveJob,
     nowIso,
 } = require('../utils/backgroundJobs');
+const { enqueueClipRender } = require('../queue/clipJobs');
 
 const router = express.Router();
 
@@ -382,171 +382,56 @@ router.post('/generate', async (req, res) => {
             : `${outputBaseName}_${Date.now()}.mp4`;
         const outputPath = path.join('uploads/temp', sanitizedOutputName);
 
-        // Mark queued in DB
-        if (Number.isInteger(parsedClipIndex)) {
-            await updateClipActiveJob(transcriptId, parsedClipIndex, {
-                status: 'queued',
-                jobType: captionsOnly ? 'captions' : 'reframe',
-                progressMessage: 'Render queued…',
-                startedAt: nowIso(),
-                completedAt: null,
-                error: null,
-            });
-        }
-
-        // Start background worker — returns immediately
-        startClipRenderWorker(transcriptId, parsedClipIndex, captionsOnly ? 'captions' : 'reframe', async () => {
+        try {
+            // Mark queued in DB
             if (Number.isInteger(parsedClipIndex)) {
                 await updateClipActiveJob(transcriptId, parsedClipIndex, {
-                    status: 'running',
-                    phase: 'render',
-                    progressMessage: 'Rendering…',
-                });
-            }
-
-            // Re-fetch transcript for fresh data
-            const freshTranscript = await Transcript.findById(transcriptId);
-            fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-            let finalSourcePath = outputPath;
-
-            if (!captionsOnly) {
-                const videoDimensions = await new Promise((resolve, reject) => {
-                    ffmpeg.ffprobe(tempVideoPath, (err, metadata) => {
-                        if (err) return reject(err);
-                        const s = metadata.streams.find(s => s.codec_type === 'video');
-                        resolve({ width: s.width, height: s.height });
-                    });
-                });
-
-                const videoAspect = videoDimensions.width / videoDimensions.height;
-                const isBlurred = reframeStyleId === 'blurred' && videoAspect > (9 / 16 + 0.01);
-
-                let cropFilter = null;
-                let resolvedCropParameters = null;
-                if (!isBlurred) {
-                    const { assetState } = getAssetState(freshTranscript, generatedClipUrl);
-                    const resolvedDetections = Array.isArray(detections) && detections.length > 0
-                        ? detections : (assetState.detections || []);
-                    resolvedCropParameters = cropParameters
-                        || assetState.analyses?.[targetPlatform]?.cropParameters
-                        || calculateCenterCrop(videoDimensions, targetRatio);
-                    cropFilter = resolvedDetections.length > 0
-                        ? generateVisualDirectorFilter(resolvedDetections, videoDimensions, targetRatio)
-                        : buildStaticCropFilter(resolvedCropParameters);
-                }
-
-                if (hasOverlay) {
-                    const captionedOutputPath = path.join('uploads', 'temp', `captioned_${sanitizedOutputName}`);
-                    if (isBlurred) {
-                        const blurredTempPath = path.join('uploads', 'temp', `blur_${sanitizedOutputName}`);
-                        await runBlurredComposition(tempVideoPath, blurredTempPath);
-                        await renderCaptionedVideo({
-                            inputPath: blurredTempPath,
-                            outputPath: captionedOutputPath,
-                            transcriptSegments: freshTranscript.transcript,
-                            styleId: captions.style,
-                            hookStyleId: hookStyleId || (captions?.enabled ? captions.style : undefined),
-                            clipDefinition, clipTimeline,
-                            captionsEnabled: Boolean(captions?.enabled),
-                            hook: normalizedHook, logger,
-                            prependVideoFilters: [],
-                            videoDimensions: { width: 1080, height: 1920 },
-                        });
-                        try { fs.unlinkSync(blurredTempPath); } catch {}
-                    } else {
-                        const croppedDimensions = { width: resolvedCropParameters.width, height: resolvedCropParameters.height };
-                        await renderCaptionedVideo({
-                            inputPath: tempVideoPath,
-                            outputPath: captionedOutputPath,
-                            transcriptSegments: freshTranscript.transcript,
-                            styleId: captions.style,
-                            hookStyleId: hookStyleId || (captions?.enabled ? captions.style : undefined),
-                            clipDefinition, clipTimeline,
-                            captionsEnabled: Boolean(captions?.enabled),
-                            hook: normalizedHook, logger,
-                            prependVideoFilters: [cropFilter],
-                            videoDimensions: croppedDimensions,
-                        });
-                    }
-                    finalSourcePath = captionedOutputPath;
-                } else {
-                    if (isBlurred) {
-                        await runBlurredComposition(tempVideoPath, outputPath);
-                    } else {
-                        await new Promise((resolve, reject) => {
-                            ffmpeg(tempVideoPath)
-                                .videoFilters(cropFilter)
-                                .outputOptions(['-c:v libx264', '-crf 23', '-preset medium', '-c:a aac', '-b:a 128k'])
-                                .output(outputPath)
-                                .on('progress', (progress) => logger.info(`Processing: ${progress.percent}% done`))
-                                .on('end', resolve)
-                                .on('error', reject)
-                                .run();
-                        });
-                    }
-                }
-            }
-
-            if (captionsOnly && hasOverlay) {
-                const captionedOutputPath = path.join('uploads', 'temp', `captioned_${sanitizedOutputName}`);
-                await renderCaptionedVideo({
-                    inputPath: tempVideoPath,
-                    outputPath: captionedOutputPath,
-                    transcriptSegments: freshTranscript.transcript,
-                    styleId: captions.style,
-                    hookStyleId: hookStyleId || (captions?.enabled ? captions.style : undefined),
-                    clipDefinition, clipTimeline,
-                    captionsEnabled: Boolean(captions?.enabled),
-                    hook: normalizedHook, logger,
-                });
-                finalSourcePath = captionedOutputPath;
-            }
-
-            const reframedDestPath = path.join('uploads', 'clips', 'reframed', sanitizedOutputName);
-            fs.mkdirSync(path.dirname(reframedDestPath), { recursive: true });
-            moveFileSafe(finalSourcePath, reframedDestPath);
-            const reframedUrl = `/uploads/clips/reframed/${sanitizedOutputName}`;
-            const reframedVideoBase = {
-                filename: sanitizedOutputName,
-                url: reframedUrl,
-                platform: captionsOnly ? null : targetPlatform,
-                platformName: captionsOnly ? 'Original frame' : targetRatio.name,
-                aspectRatio: captionsOnly ? null : `${targetRatio.width}:${targetRatio.height}`,
-                captions: captions?.enabled ? { enabled: true, style: captions.style } : { enabled: false },
-                hook: normalizedHook.enabled ? normalizedHook : { enabled: false },
-            };
-
-            if (shouldAttachToClip && Number.isInteger(parsedClipIndex)) {
-                const normalizedClips = normalizeTranscriptClips(freshTranscript);
-                const sourceClip = normalizedClips[parsedClipIndex];
-                const sourceVideo = sourceClip.videos?.find(v => v.id === sourceVideoId)
-                    || sourceClip.videos?.find(v => v.url === generatedClipUrl)
-                    || getPrimaryClipVideo(sourceClip);
-                const videoRecord = createClipVideoRecord({
-                    type: 'reframed',
-                    url: reframedUrl,
-                    filename: sanitizedOutputName,
-                    sourceVideoId: sourceVideo?.id || null,
-                    platform: captionsOnly ? null : targetPlatform,
-                    platformName: captionsOnly ? 'Original frame' : targetRatio.name,
-                    aspectRatio: captionsOnly ? null : `${targetRatio.width}:${targetRatio.height}`,
-                    captions: reframedVideoBase.captions,
-                    hook: reframedVideoBase.hook,
-                    clipTimeline: Array.isArray(clipTimeline) ? clipTimeline : sourceVideo?.clipTimeline || null,
-                });
-                await appendPrimaryClipVideo(Transcript, freshTranscript, parsedClipIndex, videoRecord);
-            }
-
-            if (Number.isInteger(parsedClipIndex)) {
-                await updateClipActiveJob(transcriptId, parsedClipIndex, {
-                    status: 'completed',
-                    phase: 'completed',
-                    progressMessage: 'Done.',
-                    completedAt: nowIso(),
+                    status: 'queued',
+                    jobType: captionsOnly ? 'captions' : 'reframe',
+                    progressMessage: 'Render queued…',
+                    startedAt: nowIso(),
+                    completedAt: null,
                     error: null,
                 });
             }
-        });
+
+            // Enqueue render job — returns immediately
+            await enqueueClipRender({
+                transcriptId,
+                clipIndex: parsedClipIndex,
+                kind: 'reframe',
+                payload: {
+                    transcriptId,
+                    parsedClipIndex,
+                    targetPlatform,
+                    detections,
+                    generatedClipUrl,
+                    cropParameters,
+                    captions,
+                    normalizedHook,
+                    hookStyleId,
+                    clipDefinition,
+                    clipTimeline,
+                    sourceVideoId,
+                    reframeStyleId,
+                    sanitizedOutputName,
+                    videoUrlToUse,
+                    captionsOnly,
+                    hasOverlay,
+                    shouldAttachToClip,
+                },
+            });
+        } catch (enqueueError) {
+            if (Number.isInteger(parsedClipIndex)) {
+                await updateClipActiveJob(transcriptId, parsedClipIndex, {
+                    status: 'failed',
+                    progressMessage: 'Render could not be queued.',
+                    completedAt: nowIso(),
+                    error: enqueueError.message,
+                }).catch(() => {});
+            }
+            throw enqueueError;
+        }
 
         res.status(202).json({ accepted: true, transcriptId, clipIndex: parsedClipIndex });
 

@@ -274,6 +274,61 @@ Background jobs use `findByIdAndUpdate` without userId — this is intentional s
 - AI-generated metadata (captions, hashtags, descriptions) for social posts
 - Analytics dashboard for performance tracking and engagement metrics
 
+## Queue Architecture
+
+All heavy work runs through BullMQ backed by Redis. Three shared lanes:
+
+| Lane (queue) | Concurrency env (default) | Carries |
+|---|---|---|
+| `pipeline-network` | `PIPELINE_NETWORK_CONCURRENCY` (3) | extract-metadata, download-video |
+| `pipeline-transcribe` | `PIPELINE_TRANSCRIBE_CONCURRENCY` (2) | transcribe, analyze |
+| `pipeline-media` | `PIPELINE_MEDIA_CONCURRENCY` (2) | convert-mp3, thumbnail, persist-files, probe-duration, clip-generate, clip-render |
+
+`pipeline-media` is the **global ffmpeg concurrency cap** — it handles both pipeline stages and all manual clip/render work.
+
+### Job types on `pipeline-media`
+
+Each job carries a `type` field that the worker dispatches on:
+
+| `type` | Payload fields | Used by |
+|---|---|---|
+| `stage` | `transcriptId, jobType, stageName` | pipeline transcript stages |
+| `clip-generate` | `transcriptId, clipIndex, origin` | auto pipeline clips + manual single/batch |
+| `clip-render` | `transcriptId, clipIndex, kind, payload` | reframe, caption render |
+
+### Priority scheme (lower = sooner)
+
+| Work | Priority | Env override |
+|---|---|---|
+| Pipeline stages | 1 | `PIPELINE_PRIORITY_STAGE` |
+| Auto clip-gen (pipeline) | 5 | `PIPELINE_PRIORITY_CLIP` |
+| Manual clip-gen | 8 | `PIPELINE_PRIORITY_MANUAL_CLIP` |
+| Manual render (reframe/caption) | 10 | `PIPELINE_PRIORITY_MANUAL_RENDER` |
+
+### Transcript completion flow
+
+The `clips` pipeline stage enqueues one `clip-generate` job per ranked clip and returns immediately (no polling). `maybeFinalizeTranscriptClips()` in `pipeline.js` is called after every terminal pipeline clip job — if all pipeline clips are done and no live jobs remain, it completes (or fails) the transcript.
+
+Manual clip jobs (`origin:'manual'`) never affect `transcript.status`.
+
+### Adding a new pipeline stage
+
+1. Add a descriptor to `PIPELINE_STAGES` in `backend/src/queue/stages.js`
+2. Implement `run(ctx)` and `isComplete(transcript, jobType)`
+3. Assign `lane`: `network` (IO), `transcribe` (LLM), `media` (ffmpeg/CPU)
+4. No other changes needed — the driver auto-discovers it
+
+### Adding a new job type to `pipeline-media`
+
+1. Add enqueue helper in `backend/src/queue/clipJobs.js`
+2. Add the run function in `backend/src/queue/renderJobs.js` (or a new file)
+3. Add a dispatch branch in the media worker in `backend/src/queue/workers.js`
+4. Handle terminal `completed`/`failed` events in the worker
+
+### Reconciler
+
+`reconcileQueue()` runs at boot and every `RECONCILE_INTERVAL_MIN` minutes. It finds transcript rows or clip rows stuck in non-terminal states with no corresponding live BullMQ job (older than `RECONCILE_STALE_THRESHOLD_MIN` minutes) and re-enqueues them. Replaces the manual `fix-status` route as the primary mechanism.
+
 ## Important Notes
 
 - Frontend uses Turbopack for faster development builds
