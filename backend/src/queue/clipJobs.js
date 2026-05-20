@@ -20,17 +20,24 @@ const PRIORITY_MANUAL_CLIP = parseInt(process.env.PIPELINE_PRIORITY_MANUAL_CLIP 
 const PRIORITY_MANUAL_RENDER = parseInt(process.env.PIPELINE_PRIORITY_MANUAL_RENDER || '10', 10);
 
 function clipGenerateJobId(transcriptId, clipIndex) {
+    return `clip-gen-${transcriptId}-${clipIndex}`;
+}
+
+function legacyClipGenerateJobId(transcriptId, clipIndex) {
     return `clip-gen:${transcriptId}:${clipIndex}`;
 }
 
 async function enqueueClipGenerate({ transcriptId, clipIndex, origin = 'manual', priority }) {
     const resolvedPriority = priority ?? (origin === 'pipeline' ? PRIORITY_PIPELINE_CLIP : PRIORITY_MANUAL_CLIP);
     const jobId = clipGenerateJobId(transcriptId, clipIndex);
-    const existingJob = await mediaQueue.getJob(jobId).catch(() => null);
-    if (existingJob) {
-        const state = await existingJob.getState().catch(() => null);
-        if (['completed', 'failed'].includes(state)) {
-            await existingJob.remove().catch(() => {});
+    const oldJobId = legacyClipGenerateJobId(transcriptId, clipIndex);
+    for (const candidateId of [jobId, oldJobId]) {
+        const existingJob = await mediaQueue.getJob(candidateId).catch(() => null);
+        if (existingJob) {
+            const state = await existingJob.getState().catch(() => null);
+            if (['completed', 'failed'].includes(state)) {
+                await existingJob.remove().catch(() => {});
+            }
         }
     }
 
@@ -53,7 +60,7 @@ async function enqueueClipGenerate({ transcriptId, clipIndex, origin = 'manual',
 async function enqueueClipRender({ transcriptId, clipIndex, kind, payload, priority }) {
     const resolvedPriority = priority ?? PRIORITY_MANUAL_RENDER;
     // Render jobs get a time-based suffix so multiple renders can coexist in the queue.
-    const jobId = `clip-render:${transcriptId}:${clipIndex}:${Date.now()}`;
+    const jobId = `clip-render-${transcriptId}-${clipIndex}-${Date.now()}`;
 
     await mediaQueue.add(
         `clip-render:${transcriptId}:${clipIndex}`,
@@ -86,6 +93,7 @@ module.exports = {
     enqueueClipRender,
     removeClipJobs,
     clipGenerateJobId,
+    legacyClipGenerateJobId,
     PRIORITY_PIPELINE_STAGE,
     PRIORITY_PIPELINE_CLIP,
     PRIORITY_MANUAL_CLIP,

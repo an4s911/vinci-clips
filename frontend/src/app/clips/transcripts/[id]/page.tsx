@@ -402,6 +402,37 @@ export default function TranscriptDetailPage() {
         }
     };
 
+    const markBulkRenderQueued = (
+        clipIndexes: number[],
+        job: { jobType: string; progressMessage: string }
+    ) => {
+        if (clipIndexes.length === 0) return;
+        const selected = new Set(clipIndexes);
+        const startedAt = new Date().toISOString();
+
+        setTranscript(prev => {
+            if (!prev) return prev;
+            return {
+                ...prev,
+                clips: prev.clips.map((clip, index) => {
+                    if (!selected.has(index)) return clip;
+                    return {
+                        ...clip,
+                        activeJob: {
+                            ...(clip.activeJob || {}),
+                            status: 'queued',
+                            jobType: job.jobType,
+                            progressMessage: job.progressMessage,
+                            startedAt,
+                            completedAt: null,
+                            error: null,
+                        },
+                    };
+                }),
+            };
+        });
+    };
+
     const clearAnalyzedClips = async () => {
         if (!transcript || clearingClips) return;
         
@@ -1190,6 +1221,7 @@ export default function TranscriptDetailPage() {
                     sourceOverrides={captionModalSourceOverrides}
                     clips={transcript.clips}
                     onComplete={fetchTranscript}
+                    onQueueStart={markBulkRenderQueued}
                 />
             )}
 

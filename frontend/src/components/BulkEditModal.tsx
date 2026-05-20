@@ -41,6 +41,7 @@ export interface BulkEditModalProps {
     sourceOverrides?: { [clipIndex: number]: ClipVideo };
     clips: Clip[];
     onComplete: () => void;
+    onQueueStart?: (clipIndexes: number[], job: { jobType: string; progressMessage: string }) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -218,6 +219,7 @@ export default function BulkEditModal({
     sourceOverrides,
     clips,
     onComplete,
+    onQueueStart,
 }: BulkEditModalProps) {
     const [captionStyles, setCaptionStyles] = useState<CaptionStyle[]>([]);
     const [hookStyles, setHookStyles] = useState<CaptionStyle[]>([]);
@@ -296,6 +298,15 @@ export default function BulkEditModal({
 
         const errors: string[] = [];
         let done = 0;
+        const eligibleClipIndexes = clipIndexes.filter((idx) => {
+            if (reframeEnabled) return Boolean(sourceOverrides?.[idx] || generatedClips[idx]);
+            return captionsEnabled && Boolean(generatedClips[idx]);
+        });
+
+        onQueueStart?.(eligibleClipIndexes, {
+            jobType: reframeEnabled ? 'reframe' : 'caption-render',
+            progressMessage: reframeEnabled ? 'Render queued…' : 'Caption render queued.',
+        });
 
         await Promise.all(clipIndexes.map(async (idx) => {
             const clip = clips[idx];

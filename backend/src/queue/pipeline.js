@@ -49,6 +49,10 @@ function queueForLane(lane) {
 }
 
 function jobIdForStage(transcriptId, stageName) {
+    return `stage-${stageName}-${transcriptId}`;
+}
+
+function legacyJobIdForStage(transcriptId, stageName) {
     return `stage:${stageName}:${transcriptId}`;
 }
 
@@ -288,9 +292,11 @@ async function removePipelineJobs(transcriptId) {
     const allStages = PIPELINE_STAGES;
     const removals = allStages.flatMap(stage => {
         const jobId = jobIdForStage(transcriptId, stage.name);
+        const legacyJobId = legacyJobIdForStage(transcriptId, stage.name);
         const queue = queueForLane(stage.lane);
         return [
             queue.remove(jobId).catch(() => {}),
+            queue.remove(legacyJobId).catch(() => {}),
         ];
     });
     await Promise.allSettled(removals);

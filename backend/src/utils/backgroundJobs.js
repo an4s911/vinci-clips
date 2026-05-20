@@ -2,6 +2,7 @@ const { exec, execFile } = require('child_process');
 const path = require('path');
 const Transcript = require('../models/Transcript');
 const logger = require('./logger');
+const { withTranscriptWriteLock } = require('./clipVideos');
 
 const activeTranscriptJobs = new Map();
 const activeClipJobs = new Map();
@@ -431,23 +432,25 @@ function startTranscriptWorker(transcriptId, jobType, worker) {
 }
 
 async function updateClipGeneration(transcriptId, clipIndex, updates = {}, metadata = {}) {
-    const transcript = await Transcript.findById(transcriptId);
-    if (!transcript || !Array.isArray(transcript.clips) || !transcript.clips[clipIndex]) return null;
+    const updatedTranscript = await withTranscriptWriteLock(transcriptId, async () => {
+        const transcript = await Transcript.findById(transcriptId);
+        if (!transcript || !Array.isArray(transcript.clips) || !transcript.clips[clipIndex]) return null;
 
-    const clips = transcript.clips.map((clip, index) => {
-        if (index !== clipIndex) return clip;
-        const previous = clip.generation || createJobState({ status: 'idle', phase: 'prepare' });
-        return {
-            ...clip,
-            generation: {
-                ...previous,
-                ...updates,
-                updatedAt: nowIso(),
-            },
-        };
+        const clips = transcript.clips.map((clip, index) => {
+            if (index !== clipIndex) return clip;
+            const previous = clip.generation || createJobState({ status: 'idle', phase: 'prepare' });
+            return {
+                ...clip,
+                generation: {
+                    ...previous,
+                    ...updates,
+                    updatedAt: nowIso(),
+                },
+            };
+        });
+
+        return Transcript.findByIdAndUpdate(transcriptId, { clips });
     });
-
-    const updatedTranscript = await Transcript.findByIdAndUpdate(transcriptId, { clips });
     const generation = updatedTranscript?.clips?.[clipIndex]?.generation;
     logVideoProcessing(transcriptId, generation?.status || updates.status || 'running', generation?.progressMessage || updates.phase || 'Clip generation update', {
         jobType: 'clip-generation',
@@ -551,22 +554,24 @@ function startClipWorker(transcriptId, clipIndex, worker) {
 }
 
 async function updateClipActiveJob(transcriptId, clipIndex, updates = {}) {
-    const transcript = await Transcript.findById(transcriptId);
-    if (!transcript || !Array.isArray(transcript.clips) || !transcript.clips[clipIndex]) return null;
+    return withTranscriptWriteLock(transcriptId, async () => {
+        const transcript = await Transcript.findById(transcriptId);
+        if (!transcript || !Array.isArray(transcript.clips) || !transcript.clips[clipIndex]) return null;
 
-    const clips = transcript.clips.map((clip, index) => {
-        if (index !== clipIndex) return clip;
-        return {
-            ...clip,
-            activeJob: {
-                ...(clip.activeJob || {}),
-                ...updates,
-                updatedAt: nowIso(),
-            },
-        };
+        const clips = transcript.clips.map((clip, index) => {
+            if (index !== clipIndex) return clip;
+            return {
+                ...clip,
+                activeJob: {
+                    ...(clip.activeJob || {}),
+                    ...updates,
+                    updatedAt: nowIso(),
+                },
+            };
+        });
+
+        return Transcript.findByIdAndUpdate(transcriptId, { clips });
     });
-
-    return Transcript.findByIdAndUpdate(transcriptId, { clips });
 }
 
 function startClipRenderWorker(transcriptId, clipIndex, jobType, worker) {

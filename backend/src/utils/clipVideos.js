@@ -261,5 +261,6 @@ module.exports = {
     getVideoFilePath,
     makeTimestampedFilename,
     normalizeClipHook,
-    normalizeTranscriptClips
+    normalizeTranscriptClips,
+    withTranscriptWriteLock
 };
