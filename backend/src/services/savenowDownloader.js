@@ -44,7 +44,7 @@ async function downloadYouTubeVideoSavenow(transcriptId, url, outputPath, { onPr
 
         let pollResp;
         try {
-            pollResp = await axios.get(`https://${host}/ajax/progress`, {
+            pollResp = await axios.get(`https://${host}/ajax/progress.php`, {
                 params: { id: jobId },
                 timeout: 15000,
             });
@@ -61,12 +61,7 @@ async function downloadYouTubeVideoSavenow(transcriptId, url, outputPath, { onPr
 
         if (success === 1 && download_url) {
             logger.info('savenow job ready, downloading file', { jobId, download_url });
-            try {
-                await streamDownload(download_url, outputPath, signal);
-            } catch (err) {
-                logger.error('savenow streamDownload failed', { jobId, download_url, error: err.message, status: err.response?.status, data: JSON.stringify(err.response?.data)?.slice(0, 500) });
-                throw err;
-            }
+            await streamDownload(download_url, apiKey, outputPath, signal);
             return;
         }
 
@@ -81,12 +76,21 @@ async function downloadYouTubeVideoSavenow(transcriptId, url, outputPath, { onPr
     }
 }
 
-async function streamDownload(downloadUrl, outputPath, signal) {
-    const response = await axios.get(downloadUrl, {
+async function streamDownload(downloadUrl, apiKey, outputPath, signal) {
+    const urlObj = new URL(downloadUrl);
+    urlObj.searchParams.set('apikey', apiKey);
+
+    const response = await axios.get(urlObj.toString(), {
         responseType: 'stream',
         timeout: 0,
         signal,
     });
+
+    const contentType = response.headers['content-type'] || '';
+    if (!contentType.startsWith('video/') && !contentType.startsWith('application/octet-stream')) {
+        response.data.destroy();
+        throw new Error(`savenow download_url returned unexpected content-type: ${contentType}`);
+    }
 
     await new Promise((resolve, reject) => {
         const writer = fs.createWriteStream(outputPath);
