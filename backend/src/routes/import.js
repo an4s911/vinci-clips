@@ -68,6 +68,7 @@ function getYtDlpArgs(args) {
 
     const finalArgs = [
         '--js-runtimes', 'node',
+        '--remote-components', 'ejs:github',
         '--extractor-args', `youtubepot-bgutilhttp:base_url=${bgutilUrl}`,
         '--extractor-args', 'youtube:player_client=mweb',
         ...args,
