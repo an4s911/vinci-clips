@@ -166,6 +166,8 @@ VIDEO_DOWNLOAD_FORMAT=1080
 # bgutil-provider sidecar runs in docker-compose.prod.yml, generates PO tokens automatically
 YTDLP_BGUTIL_URL=http://bgutil-provider:4416
 # Export Firefox cookies (Netscape format), place in backend/cookies/, set path:
+# After uploading cookies to the VPS, fix ownership so the container (uid 1001) can write to it:
+#   sudo chown 1001:1001 ~/vinci-clips/backend/cookies/yt-cookies.txt
 YTDLP_COOKIES_PATH=
 YTDLP_USER_AGENT=
 ```
