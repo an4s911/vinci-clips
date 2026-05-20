@@ -11,6 +11,7 @@ const mainRoutes = require('./routes/index');
 const authRoutes = require('./routes/auth');
 const { loadUser, requireAuth } = require('./middleware/auth');
 const { cleanupLocalMedia, getCleanupConfig } = require('./utils/mediaStorage');
+const { getCookieStatus, sendAlertWebhook, getMonitorConfig } = require('./services/cookieMonitor');
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -119,6 +120,7 @@ async function startServer() {
             logger.info(`Server started successfully on port ${port}`);
         });
         startMediaCleanupScheduler();
+        startCookieMonitor();
     } catch (error) {
         logger.logError(error, { context: 'server_startup' });
         process.exit(1);
@@ -148,6 +150,45 @@ function startMediaCleanupScheduler() {
     const intervalMs = config.intervalHours * 60 * 60 * 1000;
     if (intervalMs > 0) {
         setInterval(runCleanup, intervalMs).unref();
+    }
+}
+
+function startCookieMonitor() {
+    const config = getMonitorConfig();
+    if (!config.enabled) {
+        logger.info('Cookie monitor disabled (YTDLP_COOKIES_PATH not set or COOKIE_MONITOR_ENABLED=false).');
+        return;
+    }
+
+    const runCheck = async () => {
+        const status = getCookieStatus();
+        if (status.state === 'expired') {
+            logger.warn('YouTube cookies have EXPIRED. URL imports will fail until re-exported.', {
+                expiresAt: status.expiresAt,
+                criticalCookiesFound: status.criticalCookiesFound,
+            });
+            await sendAlertWebhook(status).catch(() => {});
+        } else if (status.state === 'expiring') {
+            logger.warn(`YouTube cookies expire in ${status.daysRemaining} day(s). Re-export soon to avoid import failures.`, {
+                expiresAt: status.expiresAt,
+                daysRemaining: status.daysRemaining,
+            });
+            await sendAlertWebhook(status).catch(() => {});
+        } else if (status.state === 'missing') {
+            logger.warn('YouTube cookie file configured but not found or contains no recognised auth cookies.', {
+                path: process.env.YTDLP_COOKIES_PATH,
+            });
+        } else if (status.state === 'valid') {
+            logger.info(`YouTube cookies valid for ${status.daysRemaining} day(s).`, {
+                expiresAt: status.expiresAt,
+            });
+        }
+    };
+
+    setImmediate(runCheck);
+    const intervalMs = config.intervalHours * 60 * 60 * 1000;
+    if (intervalMs > 0) {
+        setInterval(runCheck, intervalMs).unref();
     }
 }
 

@@ -20,6 +20,7 @@ const { analyzeAndAutoGenerateClips } = require('../utils/clipAutomation');
 const { classifyImportFailure, classifyTranscriptionFailure } = require('../utils/failureMessages');
 const { extractYouTubeMetadata } = require('../services/youtubeMetadata');
 const { downloadYouTubeVideoSavenow } = require('../services/savenowDownloader');
+const { getCookieStatus } = require('../services/cookieMonitor');
 
 const DOWNLOAD_PROVIDER = (process.env.VIDEO_DOWNLOAD_PROVIDER || 'ytdlp').toLowerCase();
 
@@ -320,6 +321,15 @@ router.post('/url', async (req, res) => {
                 : classifyImportFailure(error);
             error.publicCode = failure.code;
             error.publicMessage = failure.message;
+            if (failure.code === 'YOUTUBE_AUTH_REQUIRED' && process.env.YTDLP_COOKIES_PATH) {
+                const cookieStatus = getCookieStatus();
+                logVideoProcessing(transcript._id, 'failed', 'YouTube auth challenge — cookies likely expired, re-export needed', {
+                    jobType: 'import',
+                    cookieState: cookieStatus.state,
+                    cookieExpiresAt: cookieStatus.expiresAt,
+                    cookieDaysRemaining: cookieStatus.daysRemaining,
+                });
+            }
             await Transcript.findByIdAndUpdate(transcript._id, {
                 failureReason: failure.message,
                 failedAt: new Date().toISOString(),

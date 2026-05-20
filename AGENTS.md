@@ -170,6 +170,14 @@ YTDLP_BGUTIL_URL=http://bgutil-provider:4416
 #   sudo chown 1001:1001 ~/vinci-clips/backend/cookies/yt-cookies.txt
 YTDLP_COOKIES_PATH=
 YTDLP_USER_AGENT=
+
+# Cookie expiry monitor (auto-enabled when YTDLP_COOKIES_PATH is set)
+# Warns in logs COOKIE_WARN_DAYS days before expiry; posts to COOKIE_ALERT_WEBHOOK if set.
+# Re-export cookies manually every 2-4 weeks — see .inbox/export_yt_cookies.py.
+COOKIE_MONITOR_ENABLED=true
+COOKIE_MONITOR_INTERVAL_HOURS=12
+COOKIE_WARN_DAYS=3
+COOKIE_ALERT_WEBHOOK=
 ```
 
 ### Prerequisites
