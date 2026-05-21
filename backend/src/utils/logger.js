@@ -107,19 +107,33 @@ logger.logApiCall = (method, url, statusCode, duration, metadata = {}) => {
   });
 };
 
-// Express middleware for request logging
+// Express middleware for request logging.
+// Successful GETs (200-299, under 1s) log at debug to reduce polling noise.
+// Mutations, errors, and slow requests always log at info/warn.
 logger.requestMiddleware = (req, res, next) => {
   const start = Date.now();
-  
+
   res.on('finish', () => {
     const duration = Date.now() - start;
-    logger.logApiCall(req.method, req.originalUrl, res.statusCode, duration, {
+    const meta = {
+      statusCode: res.statusCode,
+      duration: `${duration}ms`,
       userAgent: req.get('User-Agent'),
       ip: req.ip,
-      body: req.method === 'POST' ? (req.body || {}) : undefined
-    });
+      body: req.method === 'POST' ? (req.body || {}) : undefined,
+    };
+    const isQuietGet = req.method === 'GET' && res.statusCode >= 200 && res.statusCode < 300 && duration < 1000;
+    if (isQuietGet) {
+      logger.debug(`${req.method} ${req.originalUrl}`, meta);
+    } else {
+      logger.logApiCall(req.method, req.originalUrl, res.statusCode, duration, {
+        userAgent: meta.userAgent,
+        ip: meta.ip,
+        body: meta.body,
+      });
+    }
   });
-  
+
   next();
 };
 
