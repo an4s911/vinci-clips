@@ -132,6 +132,7 @@ async function transcribeAudioFile({
             logLabel,
             model: path.basename(config.model),
             threads: config.threads,
+            command: [config.bin, ...whisperArgs].join(' '),
         });
 
         let lastReportedPct = 0;
