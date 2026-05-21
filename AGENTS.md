@@ -74,6 +74,7 @@ See `/.env.example` for full list. Critical vars:
 | `YOUTUBE_API_KEY` | YouTube metadata API (required for URL imports) |
 | `VIDEO_DOWNLOAD_PROVIDER` | `ytdlp` (default), `savenow`, or `cloudapihub` |
 | `VIDEO_DOWNLOAD_RAPIDAPI_KEY` | RapidAPI key for `cloudapihub` provider (CloudApiHub YouTube Downloader) |
+| `CLOUDAPIHUB_CHUNK_COUNT` | Parallel Range-request chunks per stream for `cloudapihub` (default: `8`). Total connections = `PIPELINE_NETWORK_CONCURRENCY × CLOUDAPIHUB_CHUNK_COUNT × 2` |
 
 Binary and models are baked into the Docker image. For local dev outside Docker, compile whisper.cpp and download a GGML model manually.
 
