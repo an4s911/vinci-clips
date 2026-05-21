@@ -132,7 +132,7 @@ async function downloadYouTubeVideoCloudApiHub(transcriptId, url, outputPath, { 
 
     if (signal?.aborted) throw Object.assign(new Error('Download cancelled.'), { code: 'JOB_CANCELLED' });
 
-    logger.info('CloudApiHub: fetching stream list', { transcriptId, videoId });
+    logger.logVideoProcessing(transcriptId, 'running', 'CloudApiHub: fetching stream list', { videoId });
 
     const { data: formats } = await axios.get(`https://${API_HOST}/download`, {
         params: { id: videoId },
@@ -145,7 +145,7 @@ async function downloadYouTubeVideoCloudApiHub(transcriptId, url, outputPath, { 
         throw new Error(`CloudApiHub returned no formats for video ${videoId}`);
     }
 
-    logger.info('CloudApiHub: stream list fetched', { transcriptId, videoId, totalFormats: formats.length });
+    logger.logVideoProcessing(transcriptId, 'running', 'CloudApiHub: stream list fetched', { videoId, totalFormats: formats.length });
     onProgress?.(5, 'Stream list fetched.');
 
     if (signal?.aborted) throw Object.assign(new Error('Download cancelled.'), { code: 'JOB_CANCELLED' });
@@ -164,8 +164,8 @@ async function downloadYouTubeVideoCloudApiHub(transcriptId, url, outputPath, { 
 
     if (audioStream) {
         // DASH path: separate video + audio, mux with ffmpeg -c copy (near-zero CPU)
-        logger.info('CloudApiHub: selected streams', {
-            transcriptId, videoId,
+        logger.logVideoProcessing(transcriptId, 'running', 'CloudApiHub: selected streams', {
+            videoId,
             video: {
                 format_id: videoStream.format_id,
                 quality: videoStream.format_note,
@@ -222,7 +222,7 @@ async function downloadYouTubeVideoCloudApiHub(transcriptId, url, outputPath, { 
             onProgress?.(90, 'Muxing streams…');
             await ffmpegMux(vtmp, atmp, outputPath);
             onProgress?.(100, 'Download complete.');
-            logger.info('CloudApiHub: mux complete', { transcriptId, outputPath });
+            logger.logVideoProcessing(transcriptId, 'running', 'CloudApiHub: mux complete', { outputPath });
         } finally {
             tryUnlink(vtmp);
             tryUnlink(atmp);
@@ -239,8 +239,8 @@ async function downloadYouTubeVideoCloudApiHub(transcriptId, url, outputPath, { 
         throw new Error(`CloudApiHub: no compatible audio or combined stream found for ${videoId}`);
     }
 
-    logger.info('CloudApiHub: combined stream fallback (no separate audio found)', {
-        transcriptId, videoId,
+    logger.logVideoProcessing(transcriptId, 'running', 'CloudApiHub: combined stream fallback (no separate audio found)', {
+        videoId,
         format_id: combined.format_id,
         quality: combined.format_note,
         resolution: combined.resolution,
