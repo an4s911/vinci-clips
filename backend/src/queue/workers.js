@@ -9,7 +9,7 @@
  *   type:'clip-render'   → runReframeRender / runCaptionRender
  */
 
-const { Worker } = require('bullmq');
+const { Worker, UnrecoverableError } = require('bullmq');
 const connection = require('./connection');
 const { executeStage, handleStageTerminalFailure, maybeFinalizeTranscriptClips } = require('./pipeline');
 const { runReframeRender, runCaptionRender } = require('./renderJobs');
@@ -30,6 +30,16 @@ const {
 } = require('../utils/backgroundJobs');
 const { toUnrecoverableIfNonRetryable } = require('./cancellation');
 const logger = require('../utils/logger');
+
+// Stages where YOUTUBE_AUTH_REQUIRED should not be retried — retrying when the IP is
+// blocked is pointless and wastes queue capacity.
+const IMPORT_STAGES = new Set(['extract-metadata', 'download-video']);
+
+function isYouTubeAuthChallengeError(error, stageName) {
+    if (!IMPORT_STAGES.has(stageName)) return false;
+    const text = `${error?.stderr || ''}\n${error?.message || ''}`.toLowerCase();
+    return text.includes('sign in to confirm') || text.includes('not a bot') || text.includes('--cookies');
+}
 
 const NETWORK_CONCURRENCY = parseInt(process.env.PIPELINE_NETWORK_CONCURRENCY || '3', 10);
 const TRANSCRIBE_CONCURRENCY = parseInt(process.env.PIPELINE_TRANSCRIBE_CONCURRENCY || '2', 10);
@@ -102,6 +112,11 @@ function createNetworkOrTranscribeWorker(queueName, concurrency) {
             try {
                 await executeStage({ transcriptId, jobType, stageName });
             } catch (error) {
+                if (isYouTubeAuthChallengeError(error, stageName)) {
+                    // IP-level block — retrying immediately won't help; fail fast.
+                    await handleStageTerminalFailure(transcriptId, jobType, stageName, error).catch(() => {});
+                    throw new UnrecoverableError(error.message);
+                }
                 throw toUnrecoverableIfNonRetryable(error);
             } finally {
                 activeTranscriptJobs.delete(transcriptId);
