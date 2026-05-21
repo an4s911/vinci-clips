@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const VIDEO_ID_RE = /(?:youtube\.com\/(?:watch\?.*v=|shorts\/|embed\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
 const API_HOST = 'cloud-api-hub-youtube-downloader.p.rapidapi.com';
 const DOWNLOAD_TIMEOUT_MS = 20 * 60 * 1000;
+const CHUNK_COUNT = parseInt(process.env.CLOUDAPIHUB_CHUNK_COUNT || '8', 10);
 
 // Quality labels in preference order — 720p primary, fall through on unavailability.
 // Matched against format_note (not raw pixel height) so portrait/vertical videos work correctly.
@@ -40,13 +41,16 @@ function pickVideoStream(formats) {
  * mp4a (AAC) in m4a can be -c copy muxed into mp4 without re-encode.
  */
 function pickAudioStream(formats) {
-    return formats.find(f =>
+    const candidates = formats.filter(f =>
         f.acodec && f.acodec.toLowerCase().startsWith('mp4a') &&
         f.vcodec === 'none' &&
         f.ext === 'm4a' &&
         !String(f.format_id).endsWith('-drc') &&
         f.url
-    ) || null;
+    );
+    if (candidates.length === 0) return null;
+    // Sort by language_preference descending — original audio scores 10, auto-dubbed scores -1.
+    return candidates.sort((a, b) => (b.language_preference || 0) - (a.language_preference || 0))[0];
 }
 
 /**
@@ -70,19 +74,63 @@ function pickCombinedStream(formats, targetQualities) {
     return null;
 }
 
+async function downloadChunk(url, destPath, start, end, signal, onBytes) {
+    const response = await axios.get(url, {
+        responseType: 'stream',
+        timeout: DOWNLOAD_TIMEOUT_MS,
+        signal,
+        headers: { Range: `bytes=${start}-${end}` },
+    });
+    await new Promise((resolve, reject) => {
+        const writer = fs.createWriteStream(destPath, { start, flags: 'r+' });
+        response.data.on('data', chunk => onBytes?.(chunk.length));
+        response.data.pipe(writer);
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+        response.data.on('error', reject);
+    });
+}
+
 async function streamToFile(url, destPath, signal, onBytes) {
+    let total = 0;
+    try {
+        const head = await axios.head(url, { timeout: 15000, signal });
+        total = parseInt(head.headers['content-length'] || '0', 10);
+    } catch { /* fall through to single stream */ }
+
+    if (total > 0 && CHUNK_COUNT > 1) {
+        const fd = fs.openSync(destPath, 'w');
+        fs.ftruncateSync(fd, total);
+        fs.closeSync(fd);
+
+        const chunkSize = Math.ceil(total / CHUNK_COUNT);
+        let received = 0;
+
+        await Promise.all(
+            Array.from({ length: CHUNK_COUNT }, (_, i) => {
+                const start = i * chunkSize;
+                const end = Math.min(start + chunkSize - 1, total - 1);
+                return downloadChunk(url, destPath, start, end, signal, (bytes) => {
+                    received += bytes;
+                    onBytes?.(received, total);
+                });
+            })
+        );
+        return;
+    }
+
     const response = await axios.get(url, {
         responseType: 'stream',
         timeout: DOWNLOAD_TIMEOUT_MS,
         signal,
     });
-    const total = parseInt(response.headers['content-length'] || '0', 10);
+    const contentLength = parseInt(response.headers['content-length'] || '0', 10);
     let received = 0;
     await new Promise((resolve, reject) => {
         const writer = fs.createWriteStream(destPath);
         response.data.on('data', chunk => {
             received += chunk.length;
-            onBytes?.(received, total);
+            onBytes?.(received, contentLength);
         });
         response.data.pipe(writer);
         writer.on('finish', resolve);
