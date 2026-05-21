@@ -81,18 +81,21 @@ async function reconcileQueue() {
             !['completed', 'failed', 'cancelled'].includes(transcript.status)) {
 
             if (!liveTranscriptIds.has(id)) {
+                // Cancelling transcripts with no live job are finalized immediately —
+                // no stale threshold, so the UI clears without waiting up to 10 min.
+                if (pj.cancelRequestedAt || pj.status === 'cancelling') {
+                    logger.warn(`Reconcile: finalizing cancelled transcript ${id}`);
+                    await finalizeTranscriptCancelled(id, jobType).catch(err =>
+                        logger.error(`Reconcile: failed to finalize cancelled transcript ${id}`, { error: err.message })
+                    );
+                    cancelledTranscripts++;
+                    continue;
+                }
+
                 const lastUpdate = pj.updatedAt ? new Date(pj.updatedAt).getTime() : 0;
                 const isStale = now - lastUpdate > staleThresholdMs;
 
                 if (isStale) {
-                    if (pj.cancelRequestedAt || pj.status === 'cancelling') {
-                        logger.warn(`Reconcile: finalizing cancelled transcript ${id}`);
-                        await finalizeTranscriptCancelled(id, jobType).catch(err =>
-                            logger.error(`Reconcile: failed to finalize cancelled transcript ${id}`, { error: err.message })
-                        );
-                        cancelledTranscripts++;
-                        continue;
-                    }
                     const phase = pj.phase || 'extract-metadata';
                     logger.warn(`Reconcile: re-enqueueing orphaned transcript ${id} from phase ${phase}`);
                     await enqueuePipeline(id, jobType, phase).catch(err =>
@@ -114,14 +117,15 @@ async function reconcileQueue() {
             if (gen && ['queued', 'running', 'cancelling'].includes(gen.status)) {
                 const key = `${id}:${i}`;
                 if (!liveClipKeys.has(key)) {
+                    if (gen.cancelRequestedAt || gen.status === 'cancelling') {
+                        logger.warn(`Reconcile: finalizing cancelled clip-generate ${id}:${i}`);
+                        await finalizeClipCancelled(id, i).catch(() => {});
+                        cancelledClips++;
+                        continue;
+                    }
+
                     const lastUpdate = gen.updatedAt ? new Date(gen.updatedAt).getTime() : 0;
                     if (now - lastUpdate > staleThresholdMs) {
-                        if (gen.cancelRequestedAt || gen.status === 'cancelling') {
-                            logger.warn(`Reconcile: finalizing cancelled clip-generate ${id}:${i}`);
-                            await finalizeClipCancelled(id, i).catch(() => {});
-                            cancelledClips++;
-                            continue;
-                        }
                         logger.warn(`Reconcile: re-enqueueing orphaned clip-generate ${id}:${i}`);
                         await enqueueClipGenerate({ transcriptId: id, clipIndex: i, origin: 'manual' }).catch(err =>
                             logger.error(`Reconcile: failed to re-enqueue clip ${id}:${i}`, { error: err.message })
