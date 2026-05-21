@@ -1,358 +1,111 @@
 # Claude Agent Notes
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
-Vinci Clips is an AI-powered video clipping tool that automatically generates short, engaging video clips from longer videos. The application uses AI to transcribe videos, analyze transcripts, and suggest the best moments to turn into clips.
+Vinci Clips: AI video clipping platform. Upload/import videos → transcribe → AI clip analysis → generate clips with captions and reframing.
 
-**Architecture:**
-- **Frontend:** Next.js application with React, TypeScript, and Tailwind CSS
-- **Backend:** Node.js 22 / Express REST API server
-- **Database:** PostgreSQL 18 via Prisma ORM (schema at `backend/prisma/schema.prisma`)
-- **Auth:** Redis-backed express-session with Argon2 password hashes; single admin user created via CLI
-- **Transcript adapter:** `backend/src/localdb.js` — Prisma-backed drop-in with Mongoose-like API; consumed via `backend/src/models/Transcript.js`
-- **AI Services:** Google Gemini API for transcription and analysis
-- **Media Storage:** Local filesystem storage for video/audio files; Cloudflare R2 support is planned
-- **Video Processing:** FFmpeg for video-to-audio conversion and caption burning
+**Stack:**
+- **Frontend:** Next.js 15, React, TypeScript, Tailwind CSS, shadcn/ui
+- **Backend:** Node.js 22, Express
+- **Database:** PostgreSQL 18 via Prisma ORM (`backend/prisma/schema.prisma`)
+- **Auth:** Redis-backed express-session, Argon2 passwords, single admin user via CLI
+- **AI:** whisper.cpp (local transcription), Google Gemini API (clip analysis only)
+- **Video:** FFmpeg (conversion, caption burning), yt-dlp (YouTube downloads)
+- **Queue:** BullMQ + Redis for all background work
 
-## Development Commands
+## Key Paths
 
-### Root Level Commands
+| Path | Purpose |
+|---|---|
+| `backend/src/index.js` | Express entry, middleware, route mounting |
+| `backend/src/routes/` | All API routes mounted under `/clips/` |
+| `backend/src/queue/stages.js` | Pipeline stage definitions |
+| `backend/src/queue/workers.js` | BullMQ worker dispatch |
+| `backend/src/utils/whisperTranscription.js` | whisper.cpp transcription driver |
+| `backend/src/utils/backgroundJobs.js` | Job state, cancellation, tracking |
+| `backend/src/localdb.js` | Prisma adapter (Mongoose-like API) |
+| `backend/src/models/Transcript.js` | Thin wrapper over localdb |
+| `frontend/src/app/` | Next.js App Router pages |
+| `frontend/src/lib/api.ts` | Axios client (`withCredentials`, 401 redirect) |
+
+## Core Workflow
+
+1. User uploads or imports URL → `userId` attached to transcript record
+2. FFmpeg converts to MP3
+3. **whisper.cpp** transcribes to word-level `{ start, end, text }` entries (millisecond precision)
+4. Gemini analyzes transcript → ranked clip suggestions
+5. Clips generated via FFmpeg; captions burned in for social media
+
+## Common Commands
+
 ```bash
-# Install dependencies for both frontend and backend
-npm run install:all
+docker compose up --build                         # Start dev stack (runs migrations + prisma generate automatically)
+docker compose logs -f backend                    # Tail logs
+docker compose exec backend npm run auth:create-user -- --email x@x.com --password 'pw'
 
-# Start both frontend and backend concurrently
-npm start
-
-# Start only backend (runs on port 8080)
-npm run start:backend
-
-# Start only frontend (runs on port 3000)
-npm run start:frontend
+# Prod
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 ```
 
-### Backend Commands (from /backend directory)
-```bash
-# Start production server
-npm start
+**Adding packages:** run `npm install <pkg>` inside the relevant directory (`backend/` or `frontend/`) so `package-lock.json` stays in sync. Docker will pick it up on the next `--build`.
 
-# Start development server with auto-reload
-npm run dev
+## Docker Compose
 
-# Run tests
-npm test
+Project runs via Docker Compose. Two stacks:
+- **Dev:** `docker-compose.yml` — backend, frontend, Postgres, Redis
+- **Prod:** `docker-compose.prod.yml` — same + nginx, Certbot
 
-# Generate Prisma client after schema changes
-npm run db:generate
+**The only env file that matters is `/.env` (root).** `/.env.example` is the template. In production, copy to `/.env.prod` and pass with `--env-file .env.prod`. `backend/.env` and `frontend/.env.local` are only relevant for running services outside Docker — ignore them for Docker-based work.
 
-# Apply pending migrations
-npm run db:migrate
+## Environment Variables
 
-# Push schema to DB without migration files (dev shortcut)
-npm run db:push
+See `/.env.example` for full list. Critical vars:
 
-# Create or reset an admin user
-npm run auth:create-user -- --email admin@example.com --password 'secret'
-npm run auth:create-user -- --email admin@example.com --password 'newsecret' --reset
-```
+| Var | Purpose |
+|---|---|
+| `GEMINI_API_KEY` | Clip analysis (analyze stage only — not transcription) |
+| `WHISPER_BIN` | Path to whisper-cli binary (default: `/usr/local/bin/whisper-cli`) |
+| `WHISPER_MODEL` | Path to GGML model (default: `/app/models/ggml-large-v3-turbo.bin`) |
+| `WHISPER_THREADS` | CPU threads (default: all CPUs) |
+| `WHISPER_LANGUAGE` | Language hint (default: auto) |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `SESSION_SECRET` | Session signing key |
+| `REDIS_PASSWORD` | Redis auth |
+| `YOUTUBE_API_KEY` | YouTube metadata API (required for URL imports) |
+| `VIDEO_DOWNLOAD_PROVIDER` | `ytdlp` (default) or `savenow` |
 
-### Frontend Commands (from /frontend directory)
-```bash
-# Start development server with Turbopack
-npm run dev
-
-# Build for production
-npm run build
-
-# Start production server
-npm start
-
-# Run ESLint
-npm run lint
-```
-
-## Key Architecture Patterns
-
-### Backend Structure
-- **Entry point:** `src/index.js` — Express server with session middleware, auth middleware, CORS, and route mounting
-- **Auth middleware:** `src/middleware/auth.js` — `loadUser` (attaches req.user from session) and `requireAuth` (blocks 401)
-- **Auth routes:** `src/routes/auth.js` — login, logout, me, change-password at `/clips/auth/*`
-- **Database client:** `src/db/prisma.js` — singleton PrismaClient
-- **Transcript adapter:** `src/localdb.js` — Prisma-backed with same Mongoose-like API as the old JSON adapter; maps Prisma `id` → `_id` in all responses
-- **Models:** `src/models/Transcript.js` — thin wrapper over localdb
-- **Routes:** `src/routes/` — modular route handlers mounted under `/clips` prefix (all require auth except `/clips/auth/login`)
-  - `upload.js` - File upload and processing
-  - `import.js` - URL import from supported platforms
-  - `transcripts.js` - Transcript CRUD (userId-scoped)
-  - `analyze.js` - AI analysis endpoints
-  - `clips.js` - Clip management and generation
-  - `captions.js` - Caption generation and style management
-  - `reframe.js` - Video reframing for social platforms
-  - `streamer.js` - Streamer+gameplay composition
-  - `retry-transcription.js` - Retry failed transcriptions
-  - `storage.js` - Storage usage and cleanup (requires MEDIA_ADMIN_TOKEN)
-  - `fix-status.js` - Admin endpoint to fix stuck statuses
-- **Background jobs:** `src/utils/backgroundJobs.js` — async job state management; calls `Transcript.findByIdAndUpdate` without userId (correct, these are internal updates)
-- **Media protection:** `/uploads/*` is served behind `requireAuth` middleware
-- **File Processing:** Uses `fluent-ffmpeg` for video-to-MP3 conversion and caption burning
-- **URL import services:**
-  - `src/services/youtubeMetadata.js` — always used for YouTube metadata via YouTube Data API v3 (requires `YOUTUBE_API_KEY`)
-  - `src/services/savenowDownloader.js` — download provider using `video-download-api.com`; selected via `VIDEO_DOWNLOAD_PROVIDER=savenow`
-  - Download provider toggled by `VIDEO_DOWNLOAD_PROVIDER` env var: `ytdlp` (default) or `savenow`
-
-### Frontend Structure
-- **App Router:** Uses Next.js 13+ app directory structure
-- **Auth guard:** `src/middleware.ts` — redirects to `/login` if `vc.sid` cookie is absent
-- **Login page:** `src/app/login/page.tsx` — POST to `/clips/auth/login`, stores session cookie
-- **Global auth setup:** `src/components/AuthProvider.tsx` — sets `axios.defaults.withCredentials = true` and installs a 401→/login interceptor
-- **Shell:** `src/components/AppShell.tsx` — conditionally renders Header/Footer (hidden on /login)
-- **API client:** `src/lib/api.ts` — axios instance with `withCredentials: true` and 401 redirect
-- **Main Pages:**
-  - `/login` - Sign-in form
-  - `/` → redirects to `/upload`
-  - `/upload` - Video upload/import interface
-  - `/clips/transcripts` - List all processed videos
-  - `/clips/transcripts/[id]` - Individual transcript detail with video player
-  - `/clips/bulk-download` - Select and download multiple clips
-- **Components:** Shadcn/ui components in `src/components/ui/`
-- **Styling:** Tailwind CSS with custom configuration
-
-### Core Workflow
-1. User logs in at `/login`; session cookie `vc.sid` set by backend
-2. Authenticated user uploads video via drag-and-drop interface
-3. Backend creates transcript record with `userId: req.user.id`
-4. Backend converts video to MP3 using FFmpeg in background
-5. Media files saved under local backend media directories
-6. **whisper.cpp** transcribes audio locally with word-level timestamps (one word per entry, millisecond precision via DTW alignment)
-7. Transcript data saved to Postgres through Prisma adapter
-8. Frontend displays transcript with video playback (media served from auth-protected `/uploads/*`)
-9. **Caption Generation:** FFmpeg burns styled captions into video clips for social media
-
-## Environment Setup
-
-### Required Environment Variables (backend/.env)
-```
-PORT=8080
-GEMINI_API_KEY=<gemini-api-key>
-LLM_MODEL=gemini-2.5-flash
-DATABASE_URL=postgresql://vinci:password@localhost:5432/vinci_clips?schema=public
-SESSION_SECRET=<openssl rand -base64 48>
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=<password>
-```
-
-Note: `CHUNK_DURATION_SEC`, `CHUNK_OVERLAP_SEC`, and `CHUNK_CONCURRENCY` are no longer used — transcription is handled locally by whisper.cpp which processes the full audio in one pass.
-
-### whisper.cpp Transcription Environment Variables
-```
-# Path to whisper-cli binary (default: /usr/local/bin/whisper-cli)
-WHISPER_BIN=/usr/local/bin/whisper-cli
-
-# Path to the GGML model file (default: /app/models/ggml-large-v3-turbo.bin)
-WHISPER_MODEL=/app/models/ggml-large-v3-turbo.bin
-
-# Number of CPU threads to use (default: all available CPUs)
-WHISPER_THREADS=4
-
-# Language hint (default: auto-detect). Set to e.g. "en" to skip language detection.
-WHISPER_LANGUAGE=auto
-```
-
-The binary and model are baked into the Docker image at build time (see `backend/Dockerfile`). `GEMINI_API_KEY` is still required for the **analyze** stage (clip selection) — only the transcribe stage no longer uses it.
-
-For higher transcription usage, use `CHUNK_DURATION_SEC=300`, `CHUNK_OVERLAP_SEC=30`, and `CHUNK_CONCURRENCY=4`.
-
-### YouTube Import Environment Variables
-```
-# Always required for YouTube URL imports (metadata)
-YOUTUBE_API_KEY=<youtube-data-api-v3-key>
-
-# Download provider: ytdlp (default) or savenow
-VIDEO_DOWNLOAD_PROVIDER=ytdlp
-
-# Required only when VIDEO_DOWNLOAD_PROVIDER=savenow
-VIDEO_DOWNLOAD_API_HOST=p.savenow.to
-VIDEO_DOWNLOAD_API_KEY=<savenow-api-key>
-VIDEO_DOWNLOAD_FORMAT=1080
-
-# yt-dlp bot-detection bypass (ytdlp provider only)
-# bgutil-provider sidecar runs in docker-compose.prod.yml, generates PO tokens automatically
-YTDLP_BGUTIL_URL=http://bgutil-provider:4416
-# Export Firefox cookies (Netscape format), place in backend/cookies/, set path:
-# After uploading cookies to the VPS, fix ownership so the container (uid 1001) can write to it:
-#   sudo chown 1001:1001 ~/vinci-clips/backend/cookies/yt-cookies.txt
-YTDLP_COOKIES_PATH=
-YTDLP_USER_AGENT=
-
-# Cookie expiry monitor (auto-enabled when YTDLP_COOKIES_PATH is set)
-# Warns in logs COOKIE_WARN_DAYS days before expiry; posts to COOKIE_ALERT_WEBHOOK if set.
-# Re-export cookies manually every 2-4 weeks — see .inbox/export_yt_cookies.py.
-COOKIE_MONITOR_ENABLED=true
-COOKIE_MONITOR_INTERVAL_HOURS=12
-COOKIE_WARN_DAYS=3
-COOKIE_ALERT_WEBHOOK=
-```
-
-### Prerequisites
-- Node.js v22+
-- FFmpeg in system PATH
-- PostgreSQL 18 (or Docker)
-- Redis (or Docker)
-- Gemini API key
-- YouTube Data API v3 key (for URL imports)
-- savenow API key (optional, only if `VIDEO_DOWNLOAD_PROVIDER=savenow`)
-
-## Development Guidelines
-
-### File Path Conventions
-- Frontend imports use `@/` alias pointing to `frontend/src/`
-- All API endpoints prefixed with `/clips/`
-- Auth endpoints at `/clips/auth/login`, `/clips/auth/logout`, `/clips/auth/me`, `/clips/auth/change-password`
-- Backend API URL in frontend is `process.env.NEXT_PUBLIC_API_URL`
-
-### Transcript Model Interface
-All backend code accesses transcripts through `require('../models/Transcript')` which wraps `localdb.js`. The Prisma adapter preserves the Mongoose-like interface:
-- `Transcript.find({ userId })` — list transcripts for a user
-- `Transcript.findById(id, { userId })` — get one (returns null if userId mismatch)
-- `Transcript.create({ userId, ...fields })` — userId required
-- `Transcript.findByIdAndUpdate(id, partialData)` — partial update, userId not required
-- `Transcript.findByIdAndDelete(id)` — delete by id
-- Returned docs have `_id` (mapped from Prisma `id`), and a `.save()` method
-
-Background jobs use `findByIdAndUpdate` without userId — this is intentional since jobs are internal and operate on specific IDs.
-
-### Code Style
-- ESLint with Next.js configuration for frontend
-- TypeScript for frontend components and interfaces
-- JavaScript for backend with JSDoc comments
-- Consistent error handling with try-catch blocks
-
-### Testing Approach
-- Backend: Jest for unit tests, Supertest for API tests
-- Frontend: React Testing Library (configured)
-- File upload limit: 2GB with client-side validation
-
-## Current Development Status
-
-### Completed Features
-- Video file upload with progress tracking and status management
-- Video-to-MP3 conversion and cloud storage with thumbnail generation
-- Gemini API transcription with speaker diarization (segment-level timestamps)
-- Transcript storage and retrieval with status tracking (now in Postgres)
-- AI-powered clip analysis and generation
-- Frontend interfaces for upload, transcript viewing, and clip management
-- Homepage with recent videos and status indicators
-- Comprehensive status management system (uploading → converting → transcribing → completed/failed)
-- **Auth system**: Postgres User table + Argon2 passwords + Redis session store + CLI user creation
-
-### In Development: TikTok/Reels Caption System
-- **Technical Requirements:**
-  - Upgrade Gemini API integration to use `audioTimestamp: true` for word-level precision
-  - Implement FFmpeg caption burning with popular social media styles
-  - Create caption style presets (Bold Center, Neon Pop, Typewriter, Bubble, Minimal Clean)
-  - Add popular fonts (Montserrat, Poppins, Bebas Neue, Oswald, Roboto) to system
-- **Caption Styles Specification:**
-  - **Bold Center**: Heavy sans-serif, center-aligned, white text with black outline, suitable for all content
-  - **Neon Pop**: Bright gradient colors (yellow/pink/cyan), bold fonts, drop shadows, trending style
-  - **Typewriter**: Monospace fonts, word-by-word appearance animation, vintage aesthetic
-  - **Bubble Style**: Rounded text backgrounds, colorful overlays, soft shadows, friendly tone
-  - **Minimal Clean**: Light fonts, subtle backgrounds, elegant spacing, professional look
-- **Implementation Plan:**
-  1. Modify Gemini API call to include word-level timestamps
-  2. Create caption style engine with FFmpeg integration
-  3. Build style preset selection UI with live preview
-  4. Test word-timing accuracy and style rendering quality
-
-### Next Development Priorities
-#### Phase 1: Core Platform Enhancements (High Priority)
-- URL video import from YouTube, Instagram, LinkedIn, Vimeo, TikTok
-- Fix clip generation routing issues and improve error handling
-- Enhanced UI/UX with responsive design and mobile optimization
-- Performance optimization with background job processing
-
-#### Phase 2: Advanced Content Features (Medium Priority)
-- **TikTok/Reels Style Captions (HIGH PRIORITY)** - Burned-in captions with popular social media styles
-  - Word-level timestamp precision using Gemini API `audioTimestamp: true`
-  - Popular caption styles: Bold Center, Neon Pop, Typewriter, Bubble, Minimal Clean
-  - Popular fonts: Montserrat Bold, Poppins SemiBold, Bebas Neue, Oswald, Roboto Black
-  - FFmpeg integration for burning captions directly into video
-  - Style preset selection UI with real-time preview
-- Auto-reframing for social media aspect ratios (9:16, 1:1, 16:9) with AI subject detection
-- AI-generated B-roll integration for enhanced clip engagement
-- Timeline-based clip preview and editing functionality
-
-#### Phase 3: Social Media & Publishing (Lower Priority)
-- Direct publishing to social media platforms (YouTube, TikTok, Instagram, Facebook, LinkedIn, X)
-- Content scheduling calendar with optimal posting time suggestions
-- AI-generated metadata (captions, hashtags, descriptions) for social posts
-- Analytics dashboard for performance tracking and engagement metrics
+Binary and models are baked into the Docker image. For local dev outside Docker, compile whisper.cpp and download a GGML model manually.
 
 ## Queue Architecture
 
-All heavy work runs through BullMQ backed by Redis. Three shared lanes:
+Three BullMQ lanes:
 
-| Lane (queue) | Concurrency env (default) | Carries |
+| Lane | Concurrency env | Carries |
 |---|---|---|
 | `pipeline-network` | `PIPELINE_NETWORK_CONCURRENCY` (3) | extract-metadata, download-video |
-| `pipeline-transcribe` | `PIPELINE_TRANSCRIBE_CONCURRENCY` (2) | transcribe, analyze |
-| `pipeline-media` | `PIPELINE_MEDIA_CONCURRENCY` (2) | convert-mp3, thumbnail, persist-files, probe-duration, clip-generate, clip-render |
+| `pipeline-transcribe` | `PIPELINE_TRANSCRIBE_CONCURRENCY` (2) | analyze (Gemini, network-bound) |
+| `pipeline-media` | `PIPELINE_MEDIA_CONCURRENCY` (2) | **transcribe**, convert-mp3, thumbnail, persist-files, probe-duration, clip-generate, clip-render |
 
-`pipeline-media` is the **global ffmpeg concurrency cap** — it handles both pipeline stages and all manual clip/render work.
+`pipeline-media` is the global CPU/ffmpeg cap — whisper.cpp and ffmpeg share this concurrency limit.
 
-### Job types on `pipeline-media`
-
-Each job carries a `type` field that the worker dispatches on:
-
-| `type` | Payload fields | Used by |
-|---|---|---|
-| `stage` | `transcriptId, jobType, stageName` | pipeline transcript stages |
-| `clip-generate` | `transcriptId, clipIndex, origin` | auto pipeline clips + manual single/batch |
-| `clip-render` | `transcriptId, clipIndex, kind, payload` | reframe, caption render |
-
-### Priority scheme (lower = sooner)
-
-| Work | Priority | Env override |
-|---|---|---|
-| Pipeline stages | 1 | `PIPELINE_PRIORITY_STAGE` |
-| Auto clip-gen (pipeline) | 5 | `PIPELINE_PRIORITY_CLIP` |
-| Manual clip-gen | 8 | `PIPELINE_PRIORITY_MANUAL_CLIP` |
-| Manual render (reframe/caption) | 10 | `PIPELINE_PRIORITY_MANUAL_RENDER` |
-
-### Transcript completion flow
-
-The `clips` pipeline stage enqueues one `clip-generate` job per ranked clip and returns immediately (no polling). `maybeFinalizeTranscriptClips()` in `pipeline.js` is called after every terminal pipeline clip job — if all pipeline clips are done and no live jobs remain, it completes (or fails) the transcript.
-
-Manual clip jobs (`origin:'manual'`) never affect `transcript.status`.
+**Priorities** (lower = sooner): pipeline stages = 1, auto clip-gen = 5, manual clip-gen = 8, manual render = 10.
 
 ### Adding a new pipeline stage
 
-1. Add a descriptor to `PIPELINE_STAGES` in `backend/src/queue/stages.js`
+1. Add descriptor to `PIPELINE_STAGES` in `backend/src/queue/stages.js`
 2. Implement `run(ctx)` and `isComplete(transcript, jobType)`
-3. Assign `lane`: `network` (IO), `transcribe` (LLM), `media` (ffmpeg/CPU)
-4. No other changes needed — the driver auto-discovers it
+3. Assign `lane`: `network`, `transcribe`, or `media`
 
-### Adding a new job type to `pipeline-media`
+### Transcript output contract
 
-1. Add enqueue helper in `backend/src/queue/clipJobs.js`
-2. Add the run function in `backend/src/queue/renderJobs.js` (or a new file)
-3. Add a dispatch branch in the media worker in `backend/src/queue/workers.js`
-4. Handle terminal `completed`/`failed` events in the worker
+`runTranscribe` returns `{ transcript, model }` where `transcript` is a non-empty flat array of `{ start, end, text }` — one word per entry, `start`/`end` as `"MM:SS:mmm"` strings. Downstream `clipAnalysis.js` and `captioning.js` depend on this shape.
 
-### Reconciler
+## Important Rules
 
-`reconcileQueue()` runs at boot and every `RECONCILE_INTERVAL_MIN` minutes. It finds transcript rows or clip rows stuck in non-terminal states with no corresponding live BullMQ job (older than `RECONCILE_STALE_THRESHOLD_MIN` minutes) and re-enqueues them. Replaces the manual `fix-status` route as the primary mechanism.
-
-## Important Notes
-
-- Frontend uses Turbopack for faster development builds
-- All API responses follow consistent JSON format
-- File uploads handled via multer middleware
-- When planning ensure we commit changes to git time to time to ensure progress
-- When any issues are identified which may be longer, log them as issues on git
-- When code changes require documentation, document them in `README.md` or in the relevant `.md` files listed from `README.md`.
-- in commits remove any presence of Claude including any mentions in the commit message
-- Never run `npm run build`, ask the user to do so if needed.
-- In production, the file `docker-compose.prod.yml` is used.
+- **When code changes require documentation or introduce/remove env vars, update `README.md`, `AGENTS.md`, `.env.example`, and `backend/.env.example` automatically — do not wait to be asked.**
+- Never run `npm run build` — ask the user to do it.
+- In production, use `docker-compose.prod.yml`.
+- In commits, remove any presence of Claude (no mentions in commit messages).
+- All API routes are prefixed with `/clips/`. Auth at `/clips/auth/*`. All routes except login require auth.
+- Background jobs call `Transcript.findByIdAndUpdate` without `userId` — this is intentional.
+- `GEMINI_API_KEY` is only used by the analyze stage; transcription uses whisper.cpp locally.

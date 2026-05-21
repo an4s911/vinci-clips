@@ -11,7 +11,7 @@ AI-powered video clipping platform for turning long-form videos into short clips
 - Upload local videos or import supported URLs.
 - Process media with FFmpeg and local filesystem storage.
 - Import YouTube URLs with yt-dlp, with optional cookie and user-agent settings for server/VPS deployments.
-- Transcribe audio with Google Gemini.
+- Transcribe audio locally with whisper.cpp (word-level timestamps, no API cost).
 - Analyze transcripts and suggest high-signal clips.
 - Generate single-segment or multi-segment clips in background jobs.
 - Track durable processing progress across page reloads.
@@ -25,7 +25,7 @@ AI-powered video clipping platform for turning long-form videos into short clips
 - **Persistence:** PostgreSQL 18 via Prisma ORM
 - **Sessions:** Redis-backed express-session with HttpOnly cookies
 - **Media:** Local files under `backend/uploads`
-- **AI:** Google Gemini API
+- **AI:** Google Gemini API (analysis), whisper.cpp (transcription)
 - **Video processing:** FFmpeg, yt-dlp
 - **Docker:** Development and production Compose stacks with nginx, Redis, Postgres, and Certbot support
 
@@ -83,7 +83,7 @@ For production-style local Docker testing and VPS deployment, use [docker-setup.
 
 ## Manual Local Development
 
-Manual setup requires Node.js 22+, FFmpeg, yt-dlp, a running PostgreSQL 18 instance, and a running Redis instance.
+Manual setup requires Node.js 22+, FFmpeg, yt-dlp, whisper-cli (compiled from [whisper.cpp](https://github.com/ggerganov/whisper.cpp)) + a GGML model file, a running PostgreSQL 18 instance, and a running Redis instance.
 
 ```bash
 npm run install:all
@@ -93,7 +93,7 @@ Backend env:
 
 ```bash
 cp backend/.env.example backend/.env
-# Edit DATABASE_URL, SESSION_SECRET, REDIS_PASSWORD, GEMINI_API_KEY
+# Edit DATABASE_URL, SESSION_SECRET, REDIS_PASSWORD, GEMINI_API_KEY, WHISPER_BIN, WHISPER_MODEL
 ```
 
 Generate Prisma client and run migrations:
@@ -191,22 +191,6 @@ NEXT_PUBLIC_API_URL=/api
 CORS_ORIGIN=https://yourdomain.com
 ```
 
-For Gemini free tier or constrained deployments, use:
-
-```env
-CHUNK_DURATION_SEC=180
-CHUNK_OVERLAP_SEC=20
-CHUNK_CONCURRENCY=1
-```
-
-For higher usage, use:
-
-```env
-CHUNK_DURATION_SEC=300
-CHUNK_OVERLAP_SEC=30
-CHUNK_CONCURRENCY=4
-```
-
 Then follow [VPS Production Setup](./docker-setup.md#vps-production-setup).
 
 After starting the stack, create the admin user:
@@ -255,26 +239,6 @@ Client-facing import and transcription failures are sanitized by the backend.
 The API returns `failureReason` and `processingJob.errorCode`; frontend pages
 should render those values rather than exposing raw `yt-dlp`, FFmpeg, or model
 provider errors.
-
-## Transcription Chunking
-
-Long audio is split into overlapping chunks before Gemini transcription. Lower concurrency is safer for Gemini free tier; higher concurrency is faster but can trigger rate limits or `503` high-demand errors.
-
-Free tier or constrained deployments:
-
-```env
-CHUNK_DURATION_SEC=180
-CHUNK_OVERLAP_SEC=20
-CHUNK_CONCURRENCY=1
-```
-
-Higher usage:
-
-```env
-CHUNK_DURATION_SEC=300
-CHUNK_OVERLAP_SEC=30
-CHUNK_CONCURRENCY=4
-```
 
 ## Project Layout
 
