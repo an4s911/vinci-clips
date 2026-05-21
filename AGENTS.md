@@ -72,7 +72,8 @@ See `/.env.example` for full list. Critical vars:
 | `SESSION_SECRET` | Session signing key |
 | `REDIS_PASSWORD` | Redis auth |
 | `YOUTUBE_API_KEY` | YouTube metadata API (required for URL imports) |
-| `VIDEO_DOWNLOAD_PROVIDER` | `ytdlp` (default) or `savenow` |
+| `VIDEO_DOWNLOAD_PROVIDER` | `ytdlp` (default), `savenow`, or `cloudapihub` |
+| `VIDEO_DOWNLOAD_RAPIDAPI_KEY` | RapidAPI key for `cloudapihub` provider (CloudApiHub YouTube Downloader) |
 
 Binary and models are baked into the Docker image. For local dev outside Docker, compile whisper.cpp and download a GGML model manually.
 

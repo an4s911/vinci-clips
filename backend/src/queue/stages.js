@@ -33,6 +33,7 @@ const { transcribeAudioFile } = require('../utils/whisperTranscription');
 const { analyzeTranscriptForClips } = require('../utils/clipAnalysis');
 const { extractYouTubeMetadata } = require('../services/youtubeMetadata');
 const { downloadYouTubeVideoSavenow } = require('../services/savenowDownloader');
+const { downloadYouTubeVideoCloudApiHub } = require('../services/cloudApiHubDownloader');
 const {
     assertTranscriptNotCancelled,
     completeTranscriptJob,
@@ -198,6 +199,16 @@ async function runDownloadVideo({ transcriptId, jobType, transcript }) {
     if (DOWNLOAD_PROVIDER === 'savenow') {
         const abortController = ensureActiveAbortController(transcriptId);
         await downloadYouTubeVideoSavenow(transcriptId, url, videoPath, {
+            signal: abortController?.signal,
+            onProgress: (pct, text) => markTranscriptPhase(
+                transcriptId, jobType, 'download-video',
+                text ? `Downloading ${pct}% — ${text}` : `Downloading ${pct}%`,
+                { url, platform }
+            ),
+        });
+    } else if (DOWNLOAD_PROVIDER === 'cloudapihub') {
+        const abortController = ensureActiveAbortController(transcriptId);
+        await downloadYouTubeVideoCloudApiHub(transcriptId, url, videoPath, {
             signal: abortController?.signal,
             onProgress: (pct, text) => markTranscriptPhase(
                 transcriptId, jobType, 'download-video',
