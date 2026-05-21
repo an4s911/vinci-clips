@@ -188,29 +188,36 @@ async function downloadYouTubeVideoCloudApiHub(transcriptId, url, outputPath, { 
 
         const videoSize = videoStream.filesize || videoStream.filesize_approx || 0;
         const audioSize = audioStream.filesize || audioStream.filesize_approx || 0;
+        const totalSize = videoSize + audioSize;
 
+        let videoBytesReceived = 0;
+        let audioBytesReceived = 0;
         let lastReportedPct = -1;
-        const throttledProgress = (pct, text) => {
+
+        const reportProgress = () => {
+            let pct;
+            if (totalSize > 0) {
+                pct = Math.round(5 + ((videoBytesReceived + audioBytesReceived) / totalSize) * 85);
+            } else {
+                pct = 47;
+            }
             if (pct - lastReportedPct >= 5) {
                 lastReportedPct = pct;
-                onProgress?.(pct, text);
+                onProgress?.(pct, 'Fetching streams…');
             }
         };
 
         try {
-            await streamToFile(videoStream.url, vtmp, signal, (received, total) => {
-                const knownTotal = total || videoSize;
-                const pct = knownTotal ? Math.round(5 + (received / knownTotal) * 65) : 5;
-                throttledProgress(pct, 'Fetching video stream…');
-            });
-
-            if (signal?.aborted) throw Object.assign(new Error('Download cancelled.'), { code: 'JOB_CANCELLED' });
-
-            await streamToFile(audioStream.url, atmp, signal, (received, total) => {
-                const knownTotal = total || audioSize;
-                const pct = knownTotal ? Math.round(70 + (received / knownTotal) * 20) : 70;
-                throttledProgress(pct, 'Fetching audio stream…');
-            });
+            await Promise.all([
+                streamToFile(videoStream.url, vtmp, signal, (received) => {
+                    videoBytesReceived = received;
+                    reportProgress();
+                }),
+                streamToFile(audioStream.url, atmp, signal, (received) => {
+                    audioBytesReceived = received;
+                    reportProgress();
+                }),
+            ]);
 
             onProgress?.(90, 'Muxing streams…');
             await ffmpegMux(vtmp, atmp, outputPath);
