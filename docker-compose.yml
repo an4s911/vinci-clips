@@ -63,11 +63,9 @@ services:
       LLM_MODEL: ${LLM_MODEL}
       LLM_FALLBACK_MODELS: ${LLM_FALLBACK_MODELS:-}
 
-      # whisper.cpp local transcription
-      # Place the model at backend/models/ggml-large-v3-turbo.bin for dev (mounted below).
-      # Install whisper-cli on your host or inside the container separately.
-      WHISPER_BIN: ${WHISPER_BIN:-/usr/local/bin/whisper-cli}
-      WHISPER_MODEL: ${WHISPER_MODEL:-/app/models/ggml-large-v3-turbo.bin}
+      # faster-whisper transcription (CTranslate2, int8 on CPU)
+      # In dev, mount a CT2 model at backend/models/faster-whisper-large-v3-turbo/
+      WHISPER_MODEL: ${WHISPER_MODEL:-/app/models/faster-whisper-large-v3-turbo}
       WHISPER_THREADS: ${WHISPER_THREADS:-}
       WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-}
 

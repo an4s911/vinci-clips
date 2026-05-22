@@ -1,16 +1,18 @@
 # Backend Dockerfile for Vinci Clips
-FROM node:22-alpine AS base
+FROM node:22-bookworm-slim AS base
 
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     fontconfig \
+    fonts-dejavu \
     python3 \
-    py3-pip \
-    ttf-dejavu \
+    python3-pip \
     make \
     g++ \
     curl && \
-    pip3 install --break-system-packages yt-dlp bgutil-ytdlp-pot-provider
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --break-system-packages faster-whisper yt-dlp bgutil-ytdlp-pot-provider
 
 RUN mkdir -p /usr/share/fonts/truetype/google && \
     curl -fL --retry 3 -o /usr/share/fonts/truetype/google/Montserrat.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf" && \
@@ -25,28 +27,10 @@ RUN mkdir -p /usr/share/fonts/truetype/google && \
 
 WORKDIR /app
 
-# ─── whisper.cpp: compile binary (used by dev + prod) ────────────────────────
-FROM base AS whisper-compile
+# ─── faster-whisper: download CT2 model ──────────────────────────────────────
+FROM base AS faster-whisper-model
 
-RUN apk add --no-cache cmake git
-
-RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /whisper.cpp
-
-RUN cmake -S /whisper.cpp -B /whisper.cpp/build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_SHARED_LIBS=OFF && \
-    cmake --build /whisper.cpp/build -j$(nproc) --config Release
-
-# ─── whisper.cpp: download model (prod only — dev mounts it as a volume) ─────
-FROM whisper-compile AS whisper-model
-
-RUN mkdir -p /whisper-models && \
-    curl -fL --retry 3 \
-        -o /whisper-models/ggml-large-v3-turbo.bin \
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin" && \
-    curl -fL --retry 3 \
-        -o /whisper-models/ggml-base.en.bin \
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+RUN python3 -c "from faster_whisper import download_model; download_model('large-v3-turbo', output_dir='/whisper-models/faster-whisper-large-v3-turbo')"
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM base AS deps
@@ -58,8 +42,7 @@ RUN npx prisma generate
 
 FROM deps AS dev
 ENV NODE_ENV development
-COPY --from=whisper-compile /whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli
-RUN chmod 755 /usr/local/bin/whisper-cli && mkdir -p temp cache logs uploads storage models
+RUN mkdir -p temp cache logs uploads storage models
 EXPOSE 8080
 CMD ["sh", "-c", "npx prisma generate && npx prisma migrate deploy && node prisma/seed.js && npm run dev"]
 
@@ -70,15 +53,12 @@ FROM base AS runner
 ENV NODE_ENV production
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY . .
-COPY --from=whisper-compile /whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli
 RUN mkdir -p /app/models
-COPY --from=whisper-model /whisper-models/ggml-large-v3-turbo.bin /app/models/ggml-large-v3-turbo.bin
-COPY --from=whisper-model /whisper-models/ggml-base.en.bin /app/models/ggml-base.en.bin
+COPY --from=faster-whisper-model /whisper-models/large-v3-turbo /app/models/faster-whisper-large-v3-turbo
 RUN mkdir -p temp cache logs && \
-    addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001 && \
-    chown -R nodejs:nodejs /app && \
-    chmod 755 /usr/local/bin/whisper-cli
+    addgroup --gid 1001 nodejs && \
+    adduser --disabled-password --gecos '' --uid 1001 --gid 1001 nodejs && \
+    chown -R nodejs:nodejs /app
 
 USER nodejs
 

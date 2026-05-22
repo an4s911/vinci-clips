@@ -9,7 +9,7 @@ Vinci Clips: AI video clipping platform. Upload/import videos → transcribe →
 - **Backend:** Node.js 22, Express
 - **Database:** PostgreSQL 18 via Prisma ORM (`backend/prisma/schema.prisma`)
 - **Auth:** Redis-backed express-session, Argon2 passwords, single admin user via CLI
-- **AI:** whisper.cpp (local transcription), Google Gemini API (clip analysis only)
+- **AI:** faster-whisper/CTranslate2 (local transcription, int8 CPU), Google Gemini API (clip analysis only)
 - **Video:** FFmpeg (conversion, caption burning), yt-dlp (YouTube downloads)
 - **Queue:** BullMQ + Redis for all background work
 
@@ -32,7 +32,7 @@ Vinci Clips: AI video clipping platform. Upload/import videos → transcribe →
 
 1. User uploads or imports URL → `userId` attached to transcript record
 2. FFmpeg converts to MP3
-3. **whisper.cpp** transcribes to word-level `{ start, end, text }` entries (millisecond precision)
+3. **faster-whisper** transcribes to word-level `{ start, end, text }` entries (millisecond precision)
 4. Gemini analyzes transcript → ranked clip suggestions
 5. Clips generated via FFmpeg; captions burned in for social media
 
@@ -64,9 +64,8 @@ See `/.env.example` for full list. Critical vars:
 | Var | Purpose |
 |---|---|
 | `GEMINI_API_KEY` | Clip analysis (analyze stage only — not transcription) |
-| `WHISPER_BIN` | Path to whisper-cli binary (default: `/usr/local/bin/whisper-cli`) |
-| `WHISPER_MODEL` | Path to GGML model (default: `/app/models/ggml-large-v3-turbo.bin`) |
-| `WHISPER_THREADS` | CPU threads (default: all CPUs) |
+| `WHISPER_MODEL` | Path to CT2 model directory (default: `/app/models/faster-whisper-large-v3-turbo`). **Changing this env var alone is not enough in prod** — model is baked into the Docker image. Switching requires a Dockerfile change + rebuild. |
+| `WHISPER_THREADS` | CPU threads for faster-whisper (default: all CPUs) |
 | `WHISPER_LANGUAGE` | Language hint (default: auto) |
 | `DATABASE_URL` | PostgreSQL connection string |
 | `SESSION_SECRET` | Session signing key |

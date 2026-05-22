@@ -79,9 +79,8 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       LLM_MODEL: ${LLM_MODEL}
       LLM_FALLBACK_MODELS: ${LLM_FALLBACK_MODELS:-}
-      # whisper.cpp — binary and model baked into image; override only if needed
-      WHISPER_BIN: ${WHISPER_BIN:-/usr/local/bin/whisper-cli}
-      WHISPER_MODEL: ${WHISPER_MODEL:-/app/models/ggml-large-v3-turbo.bin}
+      # faster-whisper — CT2 model baked into image; override only if needed
+      WHISPER_MODEL: ${WHISPER_MODEL:-/app/models/faster-whisper-large-v3-turbo}
       WHISPER_THREADS: ${WHISPER_THREADS:-}
       WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-}
       REDIS_HOST: redis
