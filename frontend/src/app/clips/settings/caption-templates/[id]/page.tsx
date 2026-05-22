@@ -357,10 +357,26 @@ export default function CaptionTemplateEditorPage() {
         setDiscardDialogOpen(true);
     }, [isDirty, router]);
 
+    useEffect(() => {
+        if (!isDirty) return;
+        const handleClick = (e: MouseEvent) => {
+            const anchor = (e.target as Element).closest("a[href]") as HTMLAnchorElement | null;
+            if (!anchor) return;
+            const href = anchor.getAttribute("href");
+            if (!href || href.startsWith("http") || href.startsWith("//") || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:")) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            requestNavigation(href);
+        };
+        document.addEventListener("click", handleClick, true);
+        return () => document.removeEventListener("click", handleClick, true);
+    }, [isDirty, requestNavigation]);
+
     const discardChangesAndNavigate = () => {
         const pendingNavigation = pendingNavigationRef.current;
         allowNavigationRef.current = true;
         setDiscardDialogOpen(false);
+        // allowNavigationRef=true lets the pushState intercept pass through and self-restore
         if (pendingNavigation?.type === "path") {
             guardEntryActiveRef.current = false;
             router.push(pendingNavigation.href);

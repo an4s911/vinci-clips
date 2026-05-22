@@ -1,8 +1,17 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import axios from "axios";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { CaptionTemplatePreview, CaptionPreviewTemplate, CaptionPreviewAspect } from "@/components/CaptionTemplatePreview";
 import { Loader2, Monitor, Smartphone, Square, Zap } from "lucide-react";
 
@@ -192,6 +201,7 @@ function CombinedPreview({
 // ── Main Page ────────────────────────────────────────────────────────────────
 
 export default function AutoBulkEditPage() {
+  const router = useRouter();
   const [config, setConfig] = useState<AutoBulkEditConfig>(DEFAULT_CONFIG);
   const [captionStyles, setCaptionStyles] = useState<CaptionStyle[]>([]);
   const [hookStyles, setHookStyles] = useState<CaptionStyle[]>([]);
@@ -201,6 +211,8 @@ export default function AutoBulkEditPage() {
   const [success, setSuccess] = useState(false);
   const [hookCustomInput, setHookCustomInput] = useState("8");
   const savedConfig = useRef<AutoBulkEditConfig | null>(null);
+  const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
+  const pendingNavRef = useRef<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -246,6 +258,33 @@ export default function AutoBulkEditPage() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [isDirty]);
+
+  const requestNavigation = useCallback((url: string) => {
+    pendingNavRef.current = url;
+    setDiscardDialogOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const handleClick = (e: MouseEvent) => {
+      const anchor = (e.target as Element).closest("a[href]") as HTMLAnchorElement | null;
+      if (!anchor) return;
+      const href = anchor.getAttribute("href");
+      if (!href || href.startsWith("http") || href.startsWith("//") || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:")) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      requestNavigation(href);
+    };
+    document.addEventListener("click", handleClick, true);
+    return () => document.removeEventListener("click", handleClick, true);
+  }, [isDirty, requestNavigation]);
+
+  const discardAndNavigate = () => {
+    const dest = pendingNavRef.current;
+    setDiscardDialogOpen(false);
+    pendingNavRef.current = null;
+    if (dest) router.push(dest);
+  };
 
   const updateReframe  = (u: Partial<AutoBulkEditConfig["reframe"]>)  => setConfig(c => ({ ...c, reframe:  { ...c.reframe,  ...u } }));
   const updateCaptions = (u: Partial<AutoBulkEditConfig["captions"]>) => setConfig(c => ({ ...c, captions: { ...c.captions, ...u } }));
@@ -486,6 +525,24 @@ export default function AutoBulkEditPage() {
         </div>
       </div>
 
+      <Dialog open={discardDialogOpen} onOpenChange={setDiscardDialogOpen}>
+        <DialogContent className="rounded-3xl border-muted-foreground/10">
+          <DialogHeader>
+            <DialogTitle>Discard unsaved changes?</DialogTitle>
+            <DialogDescription>
+              You have unsaved changes to your auto bulk-edit settings. If you leave now, those changes will be lost.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" onClick={() => setDiscardDialogOpen(false)} className="rounded-xl">
+              Keep Editing
+            </Button>
+            <Button variant="destructive" onClick={discardAndNavigate} className="rounded-xl shadow-lg shadow-destructive/20">
+              Discard Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
