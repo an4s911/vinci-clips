@@ -273,8 +273,14 @@ export default function TranscriptDetailPage() {
         
         try {
             const response = await axios.post(`${API_URL}/clips/analyze/${transcript._id}`);
-            setTranscript(response.data);
-            setGeneratedClips(response.data.generatedClips || {});
+            const updatedTranscript = response.data?.transcript || (response.data?._id ? response.data : null);
+            if (updatedTranscript) {
+                setTranscript(updatedTranscript);
+                setGeneratedClips(updatedTranscript.generatedClips || {});
+            } else {
+                setNotice(response.data?.message || 'Re-analysis queued.');
+                await fetchTranscript();
+            }
         } catch (err) {
             setError('Failed to generate clips. Please try again.');
             console.error(err);

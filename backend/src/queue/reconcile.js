@@ -17,7 +17,7 @@
 
 const Transcript = require('../models/Transcript');
 const logger = require('../utils/logger');
-const { networkQueue, transcribeQueue, mediaQueue, enqueuePipeline } = require('./pipeline');
+const { networkQueue, transcribeQueue, mediaQueue, enqueuePipeline, maybeFinalizeTranscriptClips } = require('./pipeline');
 const { enqueueClipGenerate } = require('./clipJobs');
 const {
     finalizeClipCancelled,
@@ -28,7 +28,8 @@ const {
 
 const RECONCILE_INTERVAL_MIN = parseInt(process.env.RECONCILE_INTERVAL_MIN || '5', 10);
 // Only treat a row as orphaned if it hasn't been updated in this many minutes.
-const STALE_THRESHOLD_MIN = parseInt(process.env.RECONCILE_STALE_THRESHOLD_MIN || '10', 10);
+// Default 2 min (down from 10) so steady-state orphans clear fast.
+const STALE_THRESHOLD_MIN = parseInt(process.env.RECONCILE_STALE_THRESHOLD_MIN || '2', 10);
 
 async function getLiveJobSets() {
     const [networkJobs, transcribeJobs, mediaJobs] = await Promise.all([
@@ -51,8 +52,9 @@ async function getLiveJobSets() {
     return { liveTranscriptIds, liveClipKeys };
 }
 
-async function reconcileQueue() {
-    const staleThresholdMs = STALE_THRESHOLD_MIN * 60 * 1000;
+async function reconcileQueue({ boot = false } = {}) {
+    // In boot mode, ignore the stale threshold — act on any orphan immediately.
+    const staleThresholdMs = boot ? 0 : STALE_THRESHOLD_MIN * 60 * 1000;
     const now = Date.now();
 
     let transcripts;
@@ -126,8 +128,9 @@ async function reconcileQueue() {
 
                     const lastUpdate = gen.updatedAt ? new Date(gen.updatedAt).getTime() : 0;
                     if (now - lastUpdate > staleThresholdMs) {
-                        logger.warn(`Reconcile: re-enqueueing orphaned clip-generate ${id}:${i}`);
-                        await enqueueClipGenerate({ transcriptId: id, clipIndex: i, origin: 'manual' }).catch(err =>
+                        const origin = gen.origin || 'manual';
+                        logger.warn(`Reconcile: re-enqueueing orphaned clip-generate ${id}:${i}`, { origin });
+                        await enqueueClipGenerate({ transcriptId: id, clipIndex: i, origin }).catch(err =>
                             logger.error(`Reconcile: failed to re-enqueue clip ${id}:${i}`, { error: err.message })
                         );
                         reEnqueuedClips++;
@@ -136,21 +139,63 @@ async function reconcileQueue() {
             }
 
             // Clip-render orphan: activeJob stuck running but no live clip-render job.
-            // We can't recover the render payload from the job — mark it failed so the
-            // spinner clears and the user can retry.
-            const aj = clip.activeJob;
-            if (aj && ['queued', 'running'].includes(aj.status)) {
-                const lastUpdate = aj.updatedAt ? new Date(aj.updatedAt).getTime() : 0;
-                if (now - lastUpdate > staleThresholdMs) {
-                    logger.warn(`Reconcile: clearing orphaned clip-render activeJob ${id}:${i}`);
-                    await updateClipActiveJob(id, i, {
-                        status: 'failed',
-                        progressMessage: 'Render did not complete (server restarted). Please retry.',
-                        completedAt: nowIso(),
-                        error: 'Render interrupted by server restart.',
-                    }).catch(() => {});
-                    failedRenders++;
+            // In boot mode, skip — BullMQ stall recovery will re-claim the job shortly
+            // and run it to completion without showing the user a false-failure message.
+            // In periodic mode, if the job is still orphaned after the stale threshold,
+            // mark it failed so the spinner clears and the user can retry.
+            if (!boot) {
+                const aj = clip.activeJob;
+                if (aj && ['queued', 'running'].includes(aj.status)) {
+                    const lastUpdate = aj.updatedAt ? new Date(aj.updatedAt).getTime() : 0;
+                    if (now - lastUpdate > staleThresholdMs) {
+                        logger.warn(`Reconcile: clearing orphaned clip-render activeJob ${id}:${i}`);
+                        await updateClipActiveJob(id, i, {
+                            status: 'failed',
+                            progressMessage: 'Render did not complete (server restarted). Please retry.',
+                            completedAt: nowIso(),
+                            error: 'Render interrupted by server restart.',
+                        }).catch(() => {});
+                        failedRenders++;
+                    }
                 }
+            }
+        }
+
+        // ── Clips-deadlock sweep ─────────────────────────────────────────────
+        // If transcript is stuck at phase:'clips' but no live clip-generate jobs
+        // exist, re-enqueue any non-terminal clips and attempt finalization.
+        const pjAfter = transcript.processingJob;
+        if (pjAfter && pjAfter.phase === 'clips' &&
+            !['completed', 'failed', 'cancelled'].includes(pjAfter.status) &&
+            !['completed', 'failed', 'cancelled'].includes(transcript.status)) {
+
+            const hasLiveClipJob = Array.isArray(transcript.clips) && transcript.clips.some((_, i) =>
+                liveClipKeys.has(`${id}:${i}`)
+            );
+
+            if (!hasLiveClipJob && !liveTranscriptIds.has(id)) {
+                let sweptClips = 0;
+                if (Array.isArray(transcript.clips)) {
+                    for (let i = 0; i < transcript.clips.length; i++) {
+                        const gen = transcript.clips[i]?.generation;
+                        if (gen && ['queued', 'running'].includes(gen.status)) {
+                            const lastUpdate = gen.updatedAt ? new Date(gen.updatedAt).getTime() : 0;
+                            if (now - lastUpdate > staleThresholdMs) {
+                                const origin = gen.origin || 'manual';
+                                logger.warn(`Reconcile: clips-deadlock sweep re-enqueue ${id}:${i}`, { origin });
+                                await enqueueClipGenerate({ transcriptId: id, clipIndex: i, origin }).catch(() => {});
+                                sweptClips++;
+                            }
+                        }
+                    }
+                }
+                if (sweptClips === 0) {
+                    // No non-terminal clips to re-enqueue — attempt finalization directly.
+                    await maybeFinalizeTranscriptClips(id).catch(err =>
+                        logger.error(`Reconcile: maybeFinalizeTranscriptClips error for ${id}`, { error: err.message })
+                    );
+                }
+                reEnqueuedClips += sweptClips;
             }
         }
     }

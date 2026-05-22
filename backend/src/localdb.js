@@ -5,7 +5,7 @@ const { publicFailureReasonForTranscript, publicProcessingJob } = require('./uti
 // Fields stored as scalar columns in Postgres
 const SCALAR_FIELDS = new Set([
     'originalFilename', 'videoUrl', 'mp3Url', 'thumbnailUrl', 'duration',
-    'status', 'failureReason', 'platform', 'externalVideoId', 'importUrl', 'userId',
+    'status', 'failureReason', 'failedStage', 'platform', 'externalVideoId', 'importUrl', 'userId',
 ]);
 
 // Fields stored as DateTime columns — convert string → Date for writes
@@ -48,6 +48,7 @@ function toDoc(record) {
         duration: record.duration,
         status: record.status,
         failureReason: publicFailureReasonForTranscript(record),
+        failedStage: record.failedStage,
         failedAt: record.failedAt instanceof Date ? record.failedAt.toISOString() : record.failedAt,
         platform: record.platform,
         externalVideoId: record.externalVideoId,

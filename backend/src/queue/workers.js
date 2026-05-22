@@ -35,6 +35,14 @@ const logger = require('../utils/logger');
 // blocked is pointless and wastes queue capacity.
 const IMPORT_STAGES = new Set(['extract-metadata', 'download-video']);
 
+// BullMQ fires this error when maxStalledCount is exceeded. The job is permanently
+// failed by BullMQ, but attemptsMade doesn't reflect BullMQ retries (stalls are
+// tracked separately), so the normal attemptsLeft check would incorrectly think
+// retries remain. Detect it explicitly so we persist terminal failure.
+function isStallExhaustedError(err) {
+    return typeof err?.message === 'string' && err.message.includes('stalled more than allowable limit');
+}
+
 function isYouTubeAuthChallengeError(error, stageName) {
     if (!IMPORT_STAGES.has(stageName)) return false;
     const text = `${error?.stderr || ''}\n${error?.message || ''}`.toLowerCase();
@@ -44,6 +52,8 @@ function isYouTubeAuthChallengeError(error, stageName) {
 const NETWORK_CONCURRENCY = parseInt(process.env.PIPELINE_NETWORK_CONCURRENCY || '3', 10);
 const TRANSCRIBE_CONCURRENCY = parseInt(process.env.PIPELINE_TRANSCRIBE_CONCURRENCY || '2', 10);
 const MEDIA_CONCURRENCY = parseInt(process.env.PIPELINE_MEDIA_CONCURRENCY || '2', 10);
+const PIPELINE_LOCK_DURATION_MS = parseInt(process.env.PIPELINE_LOCK_DURATION_MS || '60000', 10);
+const PIPELINE_MAX_STALLED = parseInt(process.env.PIPELINE_MAX_STALLED || '3', 10);
 
 // ─── Clip-generate handler ────────────────────────────────────────────────────
 
@@ -122,7 +132,7 @@ function createNetworkOrTranscribeWorker(queueName, concurrency) {
                 activeTranscriptJobs.delete(transcriptId);
             }
         },
-        { connection, concurrency }
+        { connection, concurrency, lockDuration: PIPELINE_LOCK_DURATION_MS, maxStalledCount: PIPELINE_MAX_STALLED }
     );
 
     worker.on('completed', (job) => {
@@ -135,6 +145,11 @@ function createNetworkOrTranscribeWorker(queueName, concurrency) {
         const { transcriptId, jobType, stageName } = job.data;
         if (isNonRetryableQueueError(err)) {
             logger.info(`Pipeline stage stopped without retry: ${stageName} for ${transcriptId}`, { jobType, code: err.code });
+            return;
+        }
+        if (isStallExhaustedError(err)) {
+            logger.error(`Pipeline stage ${stageName} stall-exhausted for ${transcriptId}`, { jobType, error: err.message });
+            await handleStageTerminalFailure(transcriptId, jobType, stageName, err);
             return;
         }
         const attemptsLeft = (job.opts?.attempts ?? 1) - (job.attemptsMade ?? 1);
@@ -194,7 +209,7 @@ function createMediaWorker(concurrency) {
                 throw new Error(`Unknown media job type: ${type}`);
             }
         },
-        { connection, concurrency }
+        { connection, concurrency, lockDuration: PIPELINE_LOCK_DURATION_MS, maxStalledCount: PIPELINE_MAX_STALLED }
     );
 
     worker.on('completed', async (job) => {
@@ -234,6 +249,29 @@ function createMediaWorker(concurrency) {
             }
             return;
         }
+
+        // BullMQ stall exhaustion: job permanently failed by BullMQ stall checker.
+        // attemptsMade doesn't reflect stall count, so bypass the normal attemptsLeft check.
+        if (isStallExhaustedError(err)) {
+            if (type === 'clip-generate') {
+                logger.error(`Clip-generate stall-exhausted: clip ${clipIndex} for ${transcriptId}`, { error: err.message });
+                await failClipGeneration(transcriptId, clipIndex, err).catch(() => {});
+                await maybeFinalizeTranscriptClips(transcriptId).catch(() => {});
+            } else if (type === 'clip-render') {
+                logger.error(`Clip-render stall-exhausted: clip ${clipIndex} for ${transcriptId}`, { error: err.message });
+                await updateClipActiveJob(transcriptId, clipIndex, {
+                    status: 'failed',
+                    progressMessage: 'Render failed (server restarted too many times). Please retry.',
+                    completedAt: nowIso(),
+                    error: err.message,
+                }).catch(() => {});
+            } else {
+                logger.error(`Pipeline stage ${stageName} stall-exhausted for ${transcriptId}`, { jobType, error: err.message });
+                await handleStageTerminalFailure(transcriptId, jobType, stageName, err);
+            }
+            return;
+        }
+
         const attemptsLeft = (job.opts?.attempts ?? 1) - (job.attemptsMade ?? 1);
 
         if (type === 'clip-generate') {

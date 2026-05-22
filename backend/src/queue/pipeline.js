@@ -60,9 +60,8 @@ async function removeTerminalJobIfPresent(queue, jobId) {
     const existingJob = await queue.getJob(jobId).catch(() => null);
     if (!existingJob) return;
     const state = await existingJob.getState().catch(() => null);
-    if (['completed', 'failed'].includes(state)) {
-        await existingJob.remove().catch(() => {});
-    }
+    if (state === 'active') return; // worker is genuinely running it — leave it
+    await existingJob.remove().catch(() => {}); // remove any non-active leftover
 }
 
 // ─── Stage selection helpers ──────────────────────────────────────────────────
@@ -317,11 +316,11 @@ async function maybeFinalizeTranscriptClips(transcriptId) {
     if (!pj || pj.phase !== 'clips') return;
     if (['completed', 'failed', 'cancelled'].includes(pj.status)) return;
 
-    // Check for pending pipeline clip-generate jobs still in the queue.
+    // Check for pending clip-generate jobs still in the queue (any origin).
     const liveJobs = await mediaQueue.getJobs(['active', 'waiting', 'delayed', 'prioritized', 'waiting-children']).catch(() => []);
     const hasPending = liveJobs.some(job => {
         const d = job?.data;
-        return d && d.type === 'clip-generate' && d.transcriptId === transcriptId && d.origin === 'pipeline';
+        return d && d.type === 'clip-generate' && d.transcriptId === transcriptId;
     });
     if (hasPending) return;
 

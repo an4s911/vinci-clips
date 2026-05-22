@@ -74,6 +74,9 @@ See `/.env.example` for full list. Critical vars:
 | `VIDEO_DOWNLOAD_PROVIDER` | `ytdlp` (default), `savenow`, or `cloudapihub` |
 | `VIDEO_DOWNLOAD_RAPIDAPI_KEY` | RapidAPI key for `cloudapihub` provider (CloudApiHub YouTube Downloader) |
 | `CLOUDAPIHUB_CHUNK_COUNT` | Parallel Range-request chunks per stream for `cloudapihub` (default: `8`). Total connections = `PIPELINE_NETWORK_CONCURRENCY × CLOUDAPIHUB_CHUNK_COUNT × 2` |
+| `PIPELINE_LOCK_DURATION_MS` | BullMQ job lock TTL in ms (default: `60000`). Longer than the stall check interval — renewed while the job runs. Lets long ffmpeg/whisper jobs survive a single restart. |
+| `PIPELINE_MAX_STALLED` | Max times a stalled job is re-claimed before being permanently failed (default: `3`). Prevents a single restart from permanently failing a long-running job. |
+| `RECONCILE_STALE_THRESHOLD_MIN` | Periodic reconcile: minutes before an orphaned row is acted on (default: `2`). Boot reconcile always ignores this threshold. |
 
 Python dependencies and models are baked into the Docker image. For local dev outside Docker, install faster-whisper and download a CT2 model directory manually.
 

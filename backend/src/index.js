@@ -127,7 +127,7 @@ async function startServer() {
             logger.info(`Server started successfully on port ${port}`);
         });
         startPipelineWorkers();
-        await reconcileQueue();
+        await reconcileQueue({ boot: true });
         startReconcileScheduler();
         startMediaCleanupScheduler();
         startCookieMonitor();

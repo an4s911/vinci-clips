@@ -433,11 +433,10 @@ async function runClips({ transcriptId, jobType }) {
     // maybeFinalizeTranscriptClips() in pipeline.js will complete the transcript
     // once all pipeline clip jobs reach a terminal state.
     for (const clipIndex of indexes) {
-        await updateClipGeneration(transcriptId, clipIndex, createJobState({
-            status: 'queued',
-            phase: 'prepare',
-            progressMessage: 'Clip generation queued automatically.',
-        }));
+        await updateClipGeneration(transcriptId, clipIndex, {
+            ...createJobState({ status: 'queued', phase: 'prepare', progressMessage: 'Clip generation queued automatically.' }),
+            origin: 'pipeline',
+        });
         await enqueueClipGenerate({ transcriptId, clipIndex, origin: 'pipeline' });
     }
 

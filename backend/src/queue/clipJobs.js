@@ -35,9 +35,8 @@ async function enqueueClipGenerate({ transcriptId, clipIndex, origin = 'manual',
         const existingJob = await mediaQueue.getJob(candidateId).catch(() => null);
         if (existingJob) {
             const state = await existingJob.getState().catch(() => null);
-            if (['completed', 'failed'].includes(state)) {
-                await existingJob.remove().catch(() => {});
-            }
+            if (state === 'active') continue; // worker is genuinely running it — skip
+            await existingJob.remove().catch(() => {}); // remove any non-active leftover
         }
     }
 
