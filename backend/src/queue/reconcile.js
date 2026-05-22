@@ -17,14 +17,16 @@
 
 const Transcript = require('../models/Transcript');
 const logger = require('../utils/logger');
-const { networkQueue, transcribeQueue, mediaQueue, enqueuePipeline, maybeFinalizeTranscriptClips } = require('./pipeline');
-const { enqueueClipGenerate } = require('./clipJobs');
+const { networkQueue, transcribeQueue, mediaQueue, enqueuePipeline, maybeFinalizeTranscriptClips, maybeFinalizeBulkEdit } = require('./pipeline');
+const { enqueueClipGenerate, enqueueClipRender } = require('./clipJobs');
 const {
     finalizeClipCancelled,
     finalizeTranscriptCancelled,
     updateClipActiveJob,
     nowIso,
 } = require('../utils/backgroundJobs');
+const { getAutoBulkEditConfig } = require('../utils/appSettings');
+const { buildRenderPayloadForClip, MAX_AUTO_REQUEUE_ATTEMPTS } = require('../utils/autoBulkEdit');
 
 const RECONCILE_INTERVAL_MIN = parseInt(process.env.RECONCILE_INTERVAL_MIN || '5', 10);
 // Only treat a row as orphaned if it hasn't been updated in this many minutes.
@@ -49,7 +51,12 @@ async function getLiveJobSets() {
         allJobs.filter(j => j.data?.type === 'clip-generate').map(j => `${j.data.transcriptId}:${j.data.clipIndex}`)
     );
 
-    return { liveTranscriptIds, liveClipKeys };
+    // Clips with a live clip-render job (auto pipeline renders)
+    const liveRenderKeys = new Set(
+        allJobs.filter(j => j.data?.type === 'clip-render').map(j => `${j.data.transcriptId}:${j.data.clipIndex}`)
+    );
+
+    return { liveTranscriptIds, liveClipKeys, liveRenderKeys };
 }
 
 async function reconcileQueue({ boot = false } = {}) {
@@ -65,7 +72,7 @@ async function reconcileQueue({ boot = false } = {}) {
         return;
     }
 
-    const { liveTranscriptIds, liveClipKeys } = await getLiveJobSets();
+    const { liveTranscriptIds, liveClipKeys, liveRenderKeys } = await getLiveJobSets();
 
     let reEnqueuedTranscripts = 0;
     let reEnqueuedClips = 0;
@@ -99,11 +106,15 @@ async function reconcileQueue({ boot = false } = {}) {
 
                 if (isStale) {
                     const phase = pj.phase || 'extract-metadata';
-                    logger.warn(`Reconcile: re-enqueueing orphaned transcript ${id} from phase ${phase}`);
-                    await enqueuePipeline(id, jobType, phase).catch(err =>
-                        logger.error(`Reconcile: failed to re-enqueue transcript ${id}`, { error: err.message })
-                    );
-                    reEnqueuedTranscripts++;
+                    // 'bulk-edit' is not a pipeline stage — it is handled by the deadlock
+                    // sweep below. Skip enqueuePipeline for it but continue processing clips.
+                    if (phase !== 'bulk-edit') {
+                        logger.warn(`Reconcile: re-enqueueing orphaned transcript ${id} from phase ${phase}`);
+                        await enqueuePipeline(id, jobType, phase).catch(err =>
+                            logger.error(`Reconcile: failed to re-enqueue transcript ${id}`, { error: err.message })
+                        );
+                        reEnqueuedTranscripts++;
+                    }
                 }
             }
         }
@@ -139,25 +150,152 @@ async function reconcileQueue({ boot = false } = {}) {
             }
 
             // Clip-render orphan: activeJob stuck running but no live clip-render job.
-            // In boot mode, skip — BullMQ stall recovery will re-claim the job shortly
-            // and run it to completion without showing the user a false-failure message.
-            // In periodic mode, if the job is still orphaned after the stale threshold,
-            // mark it failed so the spinner clears and the user can retry.
+            // In boot mode, skip — BullMQ stall recovery will re-claim the job shortly.
+            // In periodic mode, if still orphaned after the stale threshold:
+            //   - Auto pipeline renders (origin:'pipeline'): re-enqueue by rebuilding payload
+            //     from saved config + clip state (payload is reconstructible without the user).
+            //   - Manual renders: mark failed so the spinner clears and the user can retry.
             if (!boot) {
                 const aj = clip.activeJob;
                 if (aj && ['queued', 'running'].includes(aj.status)) {
+                    const renderKey = `${id}:${i}`;
+                    if (liveRenderKeys.has(renderKey)) continue; // live job exists, skip
                     const lastUpdate = aj.updatedAt ? new Date(aj.updatedAt).getTime() : 0;
                     if (now - lastUpdate > staleThresholdMs) {
-                        logger.warn(`Reconcile: clearing orphaned clip-render activeJob ${id}:${i}`);
-                        await updateClipActiveJob(id, i, {
-                            status: 'failed',
-                            progressMessage: 'Render did not complete (server restarted). Please retry.',
-                            completedAt: nowIso(),
-                            error: 'Render interrupted by server restart.',
-                        }).catch(() => {});
-                        failedRenders++;
+                        const isAutoPipeline = aj.origin === 'pipeline' &&
+                            transcript.processingJob?.phase === 'bulk-edit';
+
+                        if (isAutoPipeline) {
+                            const autoAttempts = aj.autoAttempts || 1;
+                            if (autoAttempts < MAX_AUTO_REQUEUE_ATTEMPTS) {
+                                logger.warn(`Reconcile: re-enqueueing orphaned auto render ${id}:${i}`, { autoAttempts });
+                                try {
+                                    const config = await getAutoBulkEditConfig();
+                                    const fresh = await Transcript.findById(id);
+                                    const renderJob = fresh ? buildRenderPayloadForClip(fresh, i, config) : null;
+                                    if (renderJob) {
+                                        await updateClipActiveJob(id, i, {
+                                            status: 'queued',
+                                            autoAttempts: autoAttempts + 1,
+                                            progressMessage: 'Auto bulk-edit re-queued after interruption.',
+                                            startedAt: nowIso(),
+                                            completedAt: null,
+                                            error: null,
+                                        });
+                                        await enqueueClipRender({
+                                            transcriptId: id,
+                                            clipIndex: i,
+                                            kind: renderJob.kind,
+                                            payload: { ...renderJob.payload, autoPipeline: true },
+                                        });
+                                        reEnqueuedClips++;
+                                    } else {
+                                        // Clip or config no longer valid — fail gracefully
+                                        await updateClipActiveJob(id, i, {
+                                            status: 'failed',
+                                            progressMessage: 'Auto bulk-edit failed (clip no longer valid). Retry manually.',
+                                            completedAt: nowIso(),
+                                            error: 'Could not rebuild render payload during reconcile.',
+                                        }).catch(() => {});
+                                        failedRenders++;
+                                        await maybeFinalizeBulkEdit(id).catch(() => {});
+                                    }
+                                } catch (reEnqueueErr) {
+                                    logger.error(`Reconcile: failed to re-enqueue auto render ${id}:${i}`, { error: reEnqueueErr.message });
+                                }
+                            } else {
+                                logger.warn(`Reconcile: auto render ${id}:${i} exceeded requeue limit, marking failed`);
+                                await updateClipActiveJob(id, i, {
+                                    status: 'failed',
+                                    progressMessage: `Auto bulk-edit failed after ${MAX_AUTO_REQUEUE_ATTEMPTS} attempts. Retry manually.`,
+                                    completedAt: nowIso(),
+                                    error: 'Exceeded auto re-enqueue limit.',
+                                }).catch(() => {});
+                                failedRenders++;
+                                await maybeFinalizeBulkEdit(id).catch(() => {});
+                            }
+                        } else {
+                            logger.warn(`Reconcile: clearing orphaned clip-render activeJob ${id}:${i}`);
+                            await updateClipActiveJob(id, i, {
+                                status: 'failed',
+                                progressMessage: 'Render did not complete (server restarted). Please retry.',
+                                completedAt: nowIso(),
+                                error: 'Render interrupted by server restart.',
+                            }).catch(() => {});
+                            failedRenders++;
+                        }
                     }
                 }
+            }
+        }
+
+        // ── Bulk-edit deadlock sweep ─────────────────────────────────────────
+        // If transcript is stuck at phase:'bulk-edit' with no live clip-render jobs,
+        // re-enqueue orphaned auto renders or attempt finalization.
+        const pjBulk = transcript.processingJob;
+        if (pjBulk && pjBulk.phase === 'bulk-edit' &&
+            !['completed', 'failed', 'cancelled'].includes(pjBulk.status) &&
+            !['completed', 'failed', 'cancelled'].includes(transcript.status)) {
+
+            const hasLiveRenderJob = Array.isArray(transcript.clips) && transcript.clips.some((_, i) =>
+                liveRenderKeys.has(`${id}:${i}`)
+            );
+
+            if (!hasLiveRenderJob && !liveTranscriptIds.has(id)) {
+                let swept = 0;
+                let config = null;
+                if (Array.isArray(transcript.clips)) {
+                    for (let i = 0; i < transcript.clips.length; i++) {
+                        const aj = transcript.clips[i]?.activeJob;
+                        if (aj && aj.origin === 'pipeline' && ['queued', 'running'].includes(aj.status)) {
+                            const lastUpdate = aj.updatedAt ? new Date(aj.updatedAt).getTime() : 0;
+                            if (now - lastUpdate > staleThresholdMs) {
+                                const autoAttempts = aj.autoAttempts || 1;
+                                if (autoAttempts < MAX_AUTO_REQUEUE_ATTEMPTS) {
+                                    try {
+                                        if (!config) config = await getAutoBulkEditConfig();
+                                        const fresh = await Transcript.findById(id);
+                                        const renderJob = fresh ? buildRenderPayloadForClip(fresh, i, config) : null;
+                                        if (renderJob) {
+                                            logger.warn(`Reconcile: bulk-edit sweep re-enqueue ${id}:${i}`, { autoAttempts });
+                                            await updateClipActiveJob(id, i, {
+                                                status: 'queued',
+                                                autoAttempts: autoAttempts + 1,
+                                                progressMessage: 'Auto bulk-edit re-queued (deadlock sweep).',
+                                                startedAt: nowIso(),
+                                                completedAt: null,
+                                                error: null,
+                                            });
+                                            await enqueueClipRender({
+                                                transcriptId: id,
+                                                clipIndex: i,
+                                                kind: renderJob.kind,
+                                                payload: { ...renderJob.payload, autoPipeline: true },
+                                            });
+                                            swept++;
+                                        }
+                                    } catch (e) {
+                                        logger.error(`Reconcile: bulk-edit sweep re-enqueue failed ${id}:${i}`, { error: e.message });
+                                    }
+                                } else {
+                                    await updateClipActiveJob(id, i, {
+                                        status: 'failed',
+                                        progressMessage: `Auto bulk-edit failed after ${MAX_AUTO_REQUEUE_ATTEMPTS} attempts. Retry manually.`,
+                                        completedAt: nowIso(),
+                                        error: 'Exceeded auto re-enqueue limit.',
+                                    }).catch(() => {});
+                                    failedRenders++;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (swept === 0) {
+                    await maybeFinalizeBulkEdit(id).catch(err =>
+                        logger.error(`Reconcile: maybeFinalizeBulkEdit error for ${id}`, { error: err.message })
+                    );
+                }
+                reEnqueuedClips += swept;
             }
         }
 

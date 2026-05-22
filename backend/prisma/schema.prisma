@@ -64,6 +64,12 @@ model PromptTemplate {
   @@index([kind, isActive])
 }
 
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
 model CaptionTemplate {
   id          String   @id @default(cuid())
   name        String

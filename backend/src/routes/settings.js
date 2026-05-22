@@ -1,5 +1,7 @@
 const express = require('express');
 const prisma = require('../db/prisma');
+const { getAutoBulkEditConfig, setAutoBulkEditConfig } = require('../utils/appSettings');
+const { getCaptionStylesForClient, templateAllowsCaptions, templateAllowsHooks } = require('../utils/captioning');
 
 const router = express.Router();
 
@@ -73,6 +75,82 @@ router.delete('/blocked-words/:id', async (req, res) => {
             error: 'Failed to delete blocked word.',
             details: error.message,
         });
+    }
+});
+
+router.get('/auto-bulk-edit', async (req, res) => {
+    try {
+        const config = await getAutoBulkEditConfig();
+        res.json({ config });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to load auto bulk-edit config.', details: error.message });
+    }
+});
+
+router.put('/auto-bulk-edit', async (req, res) => {
+    try {
+        const { enabled, reframe, captions, hook } = req.body;
+
+        const VALID_PLATFORMS = ['tiktok', 'instagram', 'youtube'];
+        const VALID_REFRAME_STYLES = ['fullscreen', 'blurred'];
+
+        if (reframe?.enabled) {
+            if (!VALID_PLATFORMS.includes(reframe.platform)) {
+                return res.status(400).json({ error: `Invalid platform. Must be one of: ${VALID_PLATFORMS.join(', ')}.` });
+            }
+            if (!VALID_REFRAME_STYLES.includes(reframe.reframeStyleId)) {
+                return res.status(400).json({ error: `Invalid reframe style. Must be one of: ${VALID_REFRAME_STYLES.join(', ')}.` });
+            }
+            if (reframe.reframeStyleId === 'blurred' && reframe.platform !== 'tiktok') {
+                return res.status(400).json({ error: 'Blurred style is only available for TikTok/Shorts (9:16).' });
+            }
+        }
+
+        if (captions?.enabled && captions.styleId) {
+            const styles = await getCaptionStylesForClient();
+            const template = styles.find(s => s.id === captions.styleId);
+            if (template && !templateAllowsCaptions(template)) {
+                return res.status(400).json({ error: `Template "${template.name}" cannot be used for captions.` });
+            }
+        }
+
+        if (hook?.enabled && hook.styleId) {
+            const styles = await getCaptionStylesForClient();
+            const template = styles.find(s => s.id === hook.styleId);
+            if (template && !templateAllowsHooks(template)) {
+                return res.status(400).json({ error: `Template "${template.name}" cannot be used for hooks.` });
+            }
+        }
+
+        if (hook?.timeoutSeconds !== null && hook?.timeoutSeconds !== undefined) {
+            const t = Number(hook.timeoutSeconds);
+            if (!Number.isFinite(t) || t <= 0) {
+                return res.status(400).json({ error: 'Hook timeout must be a positive number or null.' });
+            }
+        }
+
+        const config = {
+            enabled: Boolean(enabled),
+            reframe: {
+                enabled: Boolean(reframe?.enabled),
+                platform: reframe?.platform || 'tiktok',
+                reframeStyleId: reframe?.reframeStyleId || 'fullscreen',
+            },
+            captions: {
+                enabled: Boolean(captions?.enabled),
+                styleId: captions?.styleId || null,
+            },
+            hook: {
+                enabled: Boolean(hook?.enabled),
+                styleId: hook?.styleId || null,
+                timeoutSeconds: hook?.timeoutSeconds ?? null,
+            },
+        };
+
+        await setAutoBulkEditConfig(config);
+        res.json({ config });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to save auto bulk-edit config.', details: error.message });
     }
 });
 

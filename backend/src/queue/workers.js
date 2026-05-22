@@ -11,7 +11,7 @@
 
 const { Worker, UnrecoverableError } = require('bullmq');
 const connection = require('./connection');
-const { executeStage, handleStageTerminalFailure, maybeFinalizeTranscriptClips } = require('./pipeline');
+const { executeStage, handleStageTerminalFailure, maybeFinalizeTranscriptClips, maybeFinalizeBulkEdit } = require('./pipeline');
 const { runReframeRender, runCaptionRender } = require('./renderJobs');
 const { PRIORITY_PIPELINE_STAGE } = require('./clipJobs');
 const { generateSingleClipInBackground } = require('../utils/clipGeneration');
@@ -225,6 +225,9 @@ function createMediaWorker(concurrency) {
             }
         } else if (type === 'clip-render') {
             logger.info(`Clip-render completed: clip ${clipIndex} for ${transcriptId}`);
+            if (job.data?.payload?.autoPipeline) {
+                await maybeFinalizeBulkEdit(transcriptId).catch(() => {});
+            }
         }
     });
 
@@ -246,6 +249,9 @@ function createMediaWorker(concurrency) {
                     completedAt: nowIso(),
                     error: null,
                 }).catch(() => {});
+                if (job.data?.payload?.autoPipeline) {
+                    await maybeFinalizeBulkEdit(transcriptId).catch(() => {});
+                }
             }
             return;
         }
@@ -265,6 +271,9 @@ function createMediaWorker(concurrency) {
                     completedAt: nowIso(),
                     error: err.message,
                 }).catch(() => {});
+                if (job.data?.payload?.autoPipeline) {
+                    await maybeFinalizeBulkEdit(transcriptId).catch(() => {});
+                }
             } else {
                 logger.error(`Pipeline stage ${stageName} stall-exhausted for ${transcriptId}`, { jobType, error: err.message });
                 await handleStageTerminalFailure(transcriptId, jobType, stageName, err);
@@ -299,6 +308,9 @@ function createMediaWorker(concurrency) {
                 completedAt: nowIso(),
                 error: err.message,
             }).catch(() => {});
+            if (job.data?.payload?.autoPipeline) {
+                await maybeFinalizeBulkEdit(transcriptId).catch(() => {});
+            }
             return;
         }
 

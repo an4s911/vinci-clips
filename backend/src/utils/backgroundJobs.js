@@ -71,6 +71,7 @@ function transcriptStatusForPhase(phase, fallback = 'uploading') {
     if (['upload-gemini', 'transcribe', 'resolve-mp3', 'probe-audio-duration', 'split-audio', 'merge-transcript'].includes(phase)) return 'transcribing';
     if (phase === 'analyze') return 'analyzing';
     if (phase === 'clips') return 'generating';
+    if (phase === 'bulk-edit') return 'rendering';
     if (phase === 'completed') return 'completed';
     return fallback;
 }

@@ -9,7 +9,8 @@ import {
   Palette,
   Settings as SettingsIcon,
   ChevronRight,
-  Sparkles
+  Sparkles,
+  Zap
 } from "lucide-react";
 
 const sidebarItems = [
@@ -30,6 +31,12 @@ const sidebarItems = [
     href: "/clips/settings/prompts",
     icon: Sparkles,
     description: "Customize AI prompts"
+  },
+  {
+    title: "Auto Bulk Edit",
+    href: "/clips/settings/auto-bulk-edit",
+    icon: Zap,
+    description: "Auto-render clips after generation"
   },
 ];
 

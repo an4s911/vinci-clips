@@ -94,6 +94,14 @@ Three BullMQ lanes:
 
 **Priorities** (lower = sooner): pipeline stages = 1, auto clip-gen = 5, manual clip-gen = 8, manual render = 10.
 
+### Auto Bulk Edit
+
+After all clips generate, `maybeFinalizeTranscriptClips` checks the global `AppSetting` (key `"autoBulkEdit"`) via `backend/src/utils/appSettings.js`. If enabled, the transcript moves to phase `bulk-edit` and a `clip-render` job is enqueued for every clip. A second finalizer, `maybeFinalizeBulkEdit` (`pipeline.js`), completes/fails the transcript once all renders are terminal.
+
+Global config is stored in the `AppSetting` DB table (key/value JSON, single row). Managed via `GET`/`PUT /clips/settings/auto-bulk-edit`. Settings UI at `/clips/settings/auto-bulk-edit`.
+
+**Resilience:** auto renders are tagged `origin:'pipeline'` + `autoAttempts` counter. On server restart BullMQ stall re-claim resumes active renders. Queue drops are recovered by the reconciler (`reconcile.js`): orphaned auto renders are re-enqueued by rebuilding payloads from config + clip state (no user needed); capped at `MAX_AUTO_REQUEUE_ATTEMPTS` (3). Phase `bulk-edit` is NOT a `PIPELINE_STAGES` entry — it is owned by the deadlock sweep in `reconcile.js`, not by `enqueuePipeline`.
+
 ### Adding a new pipeline stage
 
 1. Add descriptor to `PIPELINE_STAGES` in `backend/src/queue/stages.js`

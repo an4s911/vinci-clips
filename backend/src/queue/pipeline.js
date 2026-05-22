@@ -24,7 +24,11 @@ const {
     logVideoProcessing,
     markTranscriptPhase,
     nowIso,
+    updateClipActiveJob,
 } = require('../utils/backgroundJobs');
+const { getAutoBulkEditConfig } = require('../utils/appSettings');
+const { buildRenderPayloadForClip, getEligibleClipIndexes } = require('../utils/autoBulkEdit');
+const { enqueueClipRender } = require('./clipJobs');
 const { classifyImportFailure, classifyTranscriptionFailure } = require('../utils/failureMessages');
 const { getCookieStatus } = require('../services/cookieMonitor');
 const logger = require('../utils/logger');
@@ -335,9 +339,97 @@ async function maybeFinalizeTranscriptClips(transcriptId) {
         const failedCount = clips.filter(c => c.generation?.status === 'failed').length;
         const err = new Error(`${failedCount} clip(s) failed to generate`);
         await handleStageTerminalFailure(transcriptId, jobType, 'clips', err);
-    } else {
+        return;
+    }
+
+    // If auto bulk-edit is enabled, start the bulk-edit phase instead of completing.
+    let autoBulkStarted = false;
+    try {
+        const config = await getAutoBulkEditConfig();
+        const anyRenderEnabled = config.enabled && (config.reframe.enabled || config.captions.enabled || config.hook.enabled);
+        const alreadyInBulkEdit = transcript.processingJob?.phase === 'bulk-edit';
+
+        if (anyRenderEnabled && !alreadyInBulkEdit) {
+            const eligibleIndexes = getEligibleClipIndexes(transcript);
+            if (eligibleIndexes.length > 0) {
+                await markTranscriptPhase(transcriptId, jobType, 'bulk-edit', 'Auto bulk-editing clips.');
+                for (const clipIndex of eligibleIndexes) {
+                    const renderJob = buildRenderPayloadForClip(transcript, clipIndex, config);
+                    if (!renderJob) continue;
+                    await updateClipActiveJob(transcriptId, clipIndex, {
+                        status: 'queued',
+                        jobType: renderJob.kind === 'reframe' ? 'reframe' : 'captions',
+                        origin: 'pipeline',
+                        autoAttempts: 1,
+                        progressMessage: 'Auto bulk-edit queued.',
+                        startedAt: nowIso(),
+                        completedAt: null,
+                        error: null,
+                    });
+                    await enqueueClipRender({
+                        transcriptId,
+                        clipIndex,
+                        kind: renderJob.kind,
+                        payload: { ...renderJob.payload, autoPipeline: true },
+                    });
+                }
+                logVideoProcessing(transcriptId, 'running', `Auto bulk-edit: enqueued ${eligibleIndexes.length} render job(s)`, { jobType });
+                autoBulkStarted = true;
+            }
+        }
+    } catch (err) {
+        logger.warn(`Auto bulk-edit setup failed for ${transcriptId}, completing normally`, { error: err.message });
+    }
+
+    if (!autoBulkStarted) {
         await completeTranscriptJob(transcriptId, jobType, 'All clips generated.');
         logVideoProcessing(transcriptId, 'completed', 'Pipeline finished', { jobType });
+    }
+}
+
+/**
+ * Called after every terminal clip-render job whose payload.autoPipeline === true.
+ * Once all render jobs for the transcript are done, completes or fails the transcript.
+ */
+async function maybeFinalizeBulkEdit(transcriptId) {
+    const transcript = await Transcript.findById(transcriptId);
+    if (!transcript) return;
+
+    const pj = transcript.processingJob;
+    if (!pj || pj.phase !== 'bulk-edit') return;
+    if (['completed', 'failed', 'cancelled'].includes(pj.status)) return;
+
+    // Wait if any clip-render job for this transcript is still live in the queue.
+    const liveJobs = await mediaQueue.getJobs(['active', 'waiting', 'delayed', 'prioritized', 'waiting-children']).catch(() => []);
+    const hasPending = liveJobs.some(job => {
+        const d = job?.data;
+        return d && d.type === 'clip-render' && d.transcriptId === transcriptId && d.payload?.autoPipeline;
+    });
+    if (hasPending) return;
+
+    const clips = transcript.clips || [];
+    const jobType = transcript.importUrl ? 'import' : 'upload';
+
+    // Check if any auto render is still in-flight in-process (activeClipRenderJobs map).
+    // This guards against the edge case where the BullMQ event fires before renderJobs.js updates the DB.
+    const anyActiveInProcess = clips.some((clip, i) => {
+        const aj = clip.activeJob;
+        return aj?.origin === 'pipeline' && ['queued', 'running'].includes(aj.status);
+    });
+    if (anyActiveInProcess) return;
+
+    const anyFailed = clips.some(c => {
+        const aj = c.activeJob;
+        return aj?.origin === 'pipeline' && aj.status === 'failed';
+    });
+
+    if (anyFailed) {
+        const failedCount = clips.filter(c => c.activeJob?.origin === 'pipeline' && c.activeJob?.status === 'failed').length;
+        const err = new Error(`${failedCount} auto bulk-edit render(s) failed`);
+        await handleStageTerminalFailure(transcriptId, jobType, 'bulk-edit', err);
+    } else {
+        await completeTranscriptJob(transcriptId, jobType, 'Auto bulk-edit complete.');
+        logVideoProcessing(transcriptId, 'completed', 'Pipeline finished (with auto bulk-edit)', { jobType });
     }
 }
 
@@ -346,6 +438,7 @@ module.exports = {
     handleStageTerminalFailure,
     enqueuePipeline,
     maybeFinalizeTranscriptClips,
+    maybeFinalizeBulkEdit,
     removePipelineJobs,
     networkQueue,
     transcribeQueue,
