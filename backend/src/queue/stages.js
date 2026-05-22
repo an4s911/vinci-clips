@@ -504,7 +504,7 @@ const PIPELINE_STAGES = [
         isComplete: t => !!t.videoUrl && !!t.mp3Url,
     },
 
-    // ── Media lane: whisper.cpp is CPU-bound, same cap as ffmpeg ─────────────
+    // ── Media lane: faster-whisper is CPU-bound, same cap as ffmpeg ──────────
     {
         name: 'transcribe',
         lane: 'media',

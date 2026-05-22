@@ -11,7 +11,7 @@ AI-powered video clipping platform for turning long-form videos into short clips
 - Upload local videos or import supported URLs.
 - Process media with FFmpeg and local filesystem storage.
 - Import YouTube URLs with yt-dlp, with optional cookie and user-agent settings for server/VPS deployments.
-- Transcribe audio locally with whisper.cpp (word-level timestamps, no API cost).
+- Transcribe audio locally with faster-whisper/CTranslate2 (word-level timestamps, no API cost).
 - Analyze transcripts and suggest high-signal clips.
 - Generate single-segment or multi-segment clips in background jobs.
 - Track durable processing progress across page reloads.
@@ -25,7 +25,7 @@ AI-powered video clipping platform for turning long-form videos into short clips
 - **Persistence:** PostgreSQL 18 via Prisma ORM
 - **Sessions:** Redis-backed express-session with HttpOnly cookies
 - **Media:** Local files under `backend/uploads`
-- **AI:** Google Gemini API (analysis), whisper.cpp (transcription)
+- **AI:** Google Gemini API (analysis), faster-whisper/CTranslate2 (transcription)
 - **Video processing:** FFmpeg, yt-dlp
 - **Docker:** Development and production Compose stacks with nginx, Redis, Postgres, and Certbot support
 
@@ -83,7 +83,7 @@ For production-style local Docker testing and VPS deployment, use [docker-setup.
 
 ## Manual Local Development
 
-Manual setup requires Node.js 22+, FFmpeg, yt-dlp, whisper-cli (compiled from [whisper.cpp](https://github.com/ggerganov/whisper.cpp)) + a GGML model file, a running PostgreSQL 18 instance, and a running Redis instance.
+Manual setup requires Node.js 22+, Python 3, FFmpeg, yt-dlp, faster-whisper, a CTranslate2 Whisper model directory, a running PostgreSQL 18 instance, and a running Redis instance.
 
 ```bash
 npm run install:all
@@ -93,7 +93,7 @@ Backend env:
 
 ```bash
 cp backend/.env.example backend/.env
-# Edit DATABASE_URL, SESSION_SECRET, REDIS_PASSWORD, GEMINI_API_KEY, WHISPER_BIN, WHISPER_MODEL
+# Edit DATABASE_URL, SESSION_SECRET, REDIS_PASSWORD, GEMINI_API_KEY, WHISPER_MODEL
 ```
 
 Generate Prisma client and run migrations:

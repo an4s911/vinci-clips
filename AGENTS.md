@@ -21,7 +21,7 @@ Vinci Clips: AI video clipping platform. Upload/import videos → transcribe →
 | `backend/src/routes/` | All API routes mounted under `/clips/` |
 | `backend/src/queue/stages.js` | Pipeline stage definitions |
 | `backend/src/queue/workers.js` | BullMQ worker dispatch |
-| `backend/src/utils/whisperTranscription.js` | whisper.cpp transcription driver |
+| `backend/src/utils/whisperTranscription.js` | faster-whisper transcription driver |
 | `backend/src/utils/backgroundJobs.js` | Job state, cancellation, tracking |
 | `backend/src/localdb.js` | Prisma adapter (Mongoose-like API) |
 | `backend/src/models/Transcript.js` | Thin wrapper over localdb |
@@ -75,7 +75,7 @@ See `/.env.example` for full list. Critical vars:
 | `VIDEO_DOWNLOAD_RAPIDAPI_KEY` | RapidAPI key for `cloudapihub` provider (CloudApiHub YouTube Downloader) |
 | `CLOUDAPIHUB_CHUNK_COUNT` | Parallel Range-request chunks per stream for `cloudapihub` (default: `8`). Total connections = `PIPELINE_NETWORK_CONCURRENCY × CLOUDAPIHUB_CHUNK_COUNT × 2` |
 
-Binary and models are baked into the Docker image. For local dev outside Docker, compile whisper.cpp and download a GGML model manually.
+Python dependencies and models are baked into the Docker image. For local dev outside Docker, install faster-whisper and download a CT2 model directory manually.
 
 ## Queue Architecture
 
@@ -87,7 +87,7 @@ Three BullMQ lanes:
 | `pipeline-transcribe` | `PIPELINE_TRANSCRIBE_CONCURRENCY` (2) | analyze (Gemini, network-bound) |
 | `pipeline-media` | `PIPELINE_MEDIA_CONCURRENCY` (2) | **transcribe**, convert-mp3, thumbnail, persist-files, probe-duration, clip-generate, clip-render |
 
-`pipeline-media` is the global CPU/ffmpeg cap — whisper.cpp and ffmpeg share this concurrency limit.
+`pipeline-media` is the global CPU/ffmpeg cap — faster-whisper and ffmpeg share this concurrency limit.
 
 **Priorities** (lower = sooner): pipeline stages = 1, auto clip-gen = 5, manual clip-gen = 8, manual render = 10.
 
@@ -109,4 +109,4 @@ Three BullMQ lanes:
 - In commits, remove any presence of Claude (no mentions in commit messages).
 - All API routes are prefixed with `/clips/`. Auth at `/clips/auth/*`. All routes except login require auth.
 - Background jobs call `Transcript.findByIdAndUpdate` without `userId` — this is intentional.
-- `GEMINI_API_KEY` is only used by the analyze stage; transcription uses whisper.cpp locally.
+- `GEMINI_API_KEY` is only used by the analyze stage; transcription uses faster-whisper locally.
