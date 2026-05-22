@@ -703,7 +703,7 @@ export default function TranscriptDetailPage() {
 
     return (
         <main className="container mx-auto p-8">
-            <Button onClick={() => router.back()} className="mb-8">Back to Transcripts</Button>
+            <Button asChild className="mb-8"><a href="/">Back to Transcripts</a></Button>
             <Card>
                 <CardHeader>
                     <CardTitle className="text-3xl">{transcript.originalFilename}</CardTitle>
