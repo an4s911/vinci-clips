@@ -5,7 +5,8 @@ import axios from 'axios';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Check, Download, Film, Loader2, Square, SquareCheckBig } from 'lucide-react';
+import { Check, Download, Film, Loader2, Square, SquareCheckBig, HardDrive } from 'lucide-react';
+import DriveExportModal from '@/components/DriveExportModal';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -89,6 +90,7 @@ export default function BulkClipDownloadPage() {
     const [loading, setLoading] = useState(true);
     const [downloading, setDownloading] = useState(false);
     const [error, setError] = useState('');
+    const [exportOpen, setExportOpen] = useState(false);
 
     useEffect(() => {
         const fetchPrimaryClips = async () => {
@@ -217,6 +219,10 @@ export default function BulkClipDownloadPage() {
                             {downloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
                             Download Selected
                         </Button>
+                        <Button variant="outline" onClick={() => setExportOpen(true)} disabled={selectedClips.length === 0}>
+                            <HardDrive className="mr-2 h-4 w-4" />
+                            Export to Drive
+                        </Button>
                     </div>
                 </div>
 
@@ -336,6 +342,16 @@ export default function BulkClipDownloadPage() {
                     </div>
                 )}
             </div>
+
+            <DriveExportModal
+                open={exportOpen}
+                onOpenChange={setExportOpen}
+                clips={selectedClips.map(clip => ({
+                    transcriptId: clip.transcriptId,
+                    clipIndex: clip.clipIndex,
+                    videoId: clip.video.id,
+                }))}
+            />
         </main>
     );
 }

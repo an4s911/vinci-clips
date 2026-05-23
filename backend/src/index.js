@@ -65,6 +65,9 @@ function validateEnv() {
         logger.error('VIDEO_DOWNLOAD_PROVIDER=savenow but VIDEO_DOWNLOAD_API_KEY is not set. Exiting.');
         process.exit(1);
     }
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !process.env.GOOGLE_OAUTH_REDIRECT_URI) {
+        logger.warn('Google Drive OAuth not fully configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_OAUTH_REDIRECT_URI) — Drive export will show as not configured.');
+    }
 }
 
 async function startServer() {

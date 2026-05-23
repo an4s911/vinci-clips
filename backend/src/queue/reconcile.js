@@ -27,6 +27,9 @@ const {
 } = require('../utils/backgroundJobs');
 const { getAutoBulkEditConfig } = require('../utils/appSettings');
 const { buildRenderPayloadForClip, MAX_AUTO_REQUEUE_ATTEMPTS } = require('../utils/autoBulkEdit');
+const prisma = require('../db/prisma');
+const { driveExportQueue, enqueueDriveExportItem } = require('./driveExportJobs');
+const { patchItem, recomputeExport } = require('../utils/driveExports');
 
 const RECONCILE_INTERVAL_MIN = parseInt(process.env.RECONCILE_INTERVAL_MIN || '5', 10);
 // Only treat a row as orphaned if it hasn't been updated in this many minutes.
@@ -343,6 +346,75 @@ async function reconcileQueue({ boot = false } = {}) {
     } else {
         logger.debug('Reconcile complete: no orphans found');
     }
+
+    await reconcileDriveExports({ boot }).catch(err =>
+        logger.error('Reconcile drive-exports error', { error: err.message })
+    );
+}
+
+// ─── Drive-export reconcile ─────────────────────────────────────────────────
+// Finds DriveExport rows still 'running' whose pending/running items have no live
+// queue job (queue drop) and re-enqueues them. Caps re-queues per item; if an item
+// hasn't completed after the cap it is marked failed. Self-heals without the user.
+async function reconcileDriveExports({ boot = false } = {}) {
+    const staleThresholdMs = boot ? 0 : STALE_THRESHOLD_MIN * 60 * 1000;
+    const now = Date.now();
+
+    let exports;
+    try {
+        exports = await prisma.driveExport.findMany({ where: { status: 'running' } });
+    } catch (err) {
+        logger.error('Reconcile: failed to fetch drive exports', { error: err.message });
+        return;
+    }
+    if (!exports.length) return;
+
+    const liveJobs = await driveExportQueue
+        .getJobs(['active', 'waiting', 'delayed', 'prioritized', 'waiting-children'])
+        .catch(() => []);
+    const liveKeys = new Set(liveJobs.map(j => `${j.data?.exportId}:${j.data?.itemIndex}`));
+
+    let reEnqueued = 0;
+    let failed = 0;
+
+    for (const exp of exports) {
+        const updatedAt = exp.updatedAt ? new Date(exp.updatedAt).getTime() : 0;
+        if (now - updatedAt < staleThresholdMs) continue;
+
+        const items = Array.isArray(exp.items) ? exp.items : [];
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (!item || (item.status !== 'pending' && item.status !== 'running')) continue;
+            if (liveKeys.has(`${exp.id}:${i}`)) continue; // live job exists
+
+            const requeues = item.requeues || 0;
+            if (requeues >= MAX_AUTO_REQUEUE_ATTEMPTS) {
+                await patchItem(exp.id, i, {
+                    status: 'failed',
+                    error: `Export failed after ${MAX_AUTO_REQUEUE_ATTEMPTS} re-queue attempts.`,
+                }).catch(() => {});
+                failed++;
+                continue;
+            }
+
+            logger.warn(`Reconcile: re-enqueueing orphaned drive-export item ${exp.id}:${i}`, { requeues });
+            await patchItem(exp.id, i, { status: 'pending', requeues: requeues + 1 }).catch(() => {});
+            await enqueueDriveExportItem({
+                exportId: exp.id,
+                itemIndex: i,
+                transcriptId: item.transcriptId,
+                clipIndex: item.clipIndex,
+                videoId: item.videoId,
+                folderId: exp.folderId,
+                name: item.name,
+            }).catch(err => logger.error(`Reconcile: failed to re-enqueue drive-export ${exp.id}:${i}`, { error: err.message }));
+            reEnqueued++;
+        }
+    }
+
+    if (reEnqueued + failed > 0) {
+        logger.info('Reconcile drive-exports complete', { reEnqueued, failed });
+    }
 }
 
 function startReconcileScheduler() {
@@ -361,4 +433,4 @@ function startReconcileScheduler() {
     logger.info(`Reconcile scheduler started (every ${RECONCILE_INTERVAL_MIN} min).`);
 }
 
-module.exports = { reconcileQueue, startReconcileScheduler };
+module.exports = { reconcileQueue, reconcileDriveExports, startReconcileScheduler };

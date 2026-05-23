@@ -16,6 +16,7 @@ AI-powered video clipping platform for turning long-form videos into short clips
 - Generate single-segment or multi-segment clips in background jobs.
 - Track durable processing progress across page reloads.
 - Reframe generated clips for social platforms and add captions.
+- Export selected clips straight to a Google Drive folder (OAuth, background uploads with progress).
 - Multi-user ready auth with Postgres-backed sessions.
 
 ## Tech Stack
@@ -209,6 +210,30 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml exec backend npm 
 - `frontend/.env.local`: Used only when running/building the frontend directly outside Docker.
 
 Important: `NEXT_PUBLIC_API_URL` is baked into Next.js production builds. Rebuild the frontend Docker image after changing it.
+
+## Google Drive Export
+
+Export selected clips directly to a Google Drive folder. Uploads run as background
+jobs (one per clip) with progress tracked in a global tray; concurrent exports are
+supported and survive server restarts.
+
+Auth uses **OAuth 2.0 (web client)**, not a service account — a service account
+cannot upload to a personal My Drive (it has no storage quota). The admin connects
+their own Google account once and uploads go into their Drive.
+
+One-time setup in Google Cloud Console:
+
+1. Enable the **Google Drive API** in the project that owns the OAuth web client.
+2. OAuth consent screen: External, **Testing** mode; add the admin email as a
+   **Test user**; add scope `https://www.googleapis.com/auth/drive`.
+3. On the Web OAuth client, add **Authorized redirect URIs**:
+   - dev: `http://localhost:8080/clips/google-drive/auth/callback`
+   - prod: `https://<APP_DOMAIN>/api/clips/google-drive/auth/callback`
+4. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI` in `.env`.
+
+Then in the app: **Settings → Google Drive → Connect**, search and add export
+folders, and use **Export to Drive** from a transcript's clip selection or the
+Bulk Download page. Uploaded files are named `<clipId>.mp4`.
 
 ## YouTube URL Imports
 

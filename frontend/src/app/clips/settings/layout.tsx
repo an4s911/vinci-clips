@@ -10,7 +10,8 @@ import {
   Settings as SettingsIcon,
   ChevronRight,
   Sparkles,
-  Zap
+  Zap,
+  HardDrive
 } from "lucide-react";
 
 const sidebarItems = [
@@ -37,6 +38,12 @@ const sidebarItems = [
     href: "/clips/settings/auto-bulk-edit",
     icon: Zap,
     description: "Auto-render clips after generation"
+  },
+  {
+    title: "Google Drive",
+    href: "/clips/settings/google-drive",
+    icon: HardDrive,
+    description: "Connect Drive and manage export folders"
   },
 ];
 

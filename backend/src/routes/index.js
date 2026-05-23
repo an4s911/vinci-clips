@@ -15,6 +15,7 @@ const streamerRoutes = require('./streamer');
 const storageRoutes = require('./storage');
 const settingsRoutes = require('./settings');
 const promptsRoutes = require('./prompts');
+const googleDriveRoutes = require('./googleDrive');
 
 router.use('/upload', uploadRoutes);
 router.use('/import', importRoutes);
@@ -29,6 +30,7 @@ router.use('/retry', retryRoutes);
 router.use('/storage', storageRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/prompts', promptsRoutes);
+router.use('/google-drive', googleDriveRoutes);
 router.use('/admin', fixStatusRoutes);
 
 module.exports = router;

@@ -9,7 +9,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { useParams, useRouter } from 'next/navigation';
 import SmartCropModal from '@/components/SmartCropModal';
 import BulkEditModal from '@/components/BulkEditModal';
-import { AlertCircle, CheckSquare, Download, Eye, ExternalLink, Flame, Loader2, RefreshCcw, Save, Square, StopCircle, Trash2, Wand2 } from 'lucide-react';
+import DriveExportModal from '@/components/DriveExportModal';
+import { AlertCircle, CheckSquare, Download, Eye, ExternalLink, Flame, HardDrive, Loader2, RefreshCcw, Save, Square, StopCircle, Trash2, Wand2 } from 'lucide-react';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -165,6 +166,7 @@ export default function TranscriptDetailPage() {
     const [cancellingClips, setCancellingClips] = useState<{[key: number]: boolean}>({});
     const [selectedClipIndexes, setSelectedClipIndexes] = useState<Set<number>>(new Set());
     const [bulkDownloading, setBulkDownloading] = useState(false);
+    const [driveExportOpen, setDriveExportOpen] = useState(false);
     const [isCaptionModalOpen, setIsCaptionModalOpen] = useState(false);
     const [captionModalClipIndexes, setCaptionModalClipIndexes] = useState<number[]>([]);
     const [captionModalSourceOverrides, setCaptionModalSourceOverrides] = useState<{ [clipIndex: number]: ClipVideo }>({});
@@ -891,6 +893,10 @@ export default function TranscriptDetailPage() {
                                             <Button size="sm" variant="outline" onClick={() => openCaptionModal(Array.from(selectedClipIndexes))}>
                                                 Bulk Edit ({selectedClipIndexes.size})
                                             </Button>
+                                            <Button size="sm" variant="outline" onClick={() => setDriveExportOpen(true)}>
+                                                <HardDrive className="mr-1 h-3 w-3" />
+                                                Export to Drive ({selectedClipIndexes.size})
+                                            </Button>
                                         </div>
                                     )}
                                 </div>
@@ -1228,6 +1234,17 @@ export default function TranscriptDetailPage() {
                     clips={transcript.clips}
                     onComplete={fetchTranscript}
                     onQueueStart={markBulkRenderQueued}
+                />
+            )}
+
+            {transcript && (
+                <DriveExportModal
+                    open={driveExportOpen}
+                    onOpenChange={setDriveExportOpen}
+                    clips={Array.from(selectedClipIndexes).flatMap(idx => {
+                        const v = generatedClips[idx];
+                        return v ? [{ transcriptId: transcript._id, clipIndex: idx, videoId: v.id }] : [];
+                    })}
                 />
             )}
 

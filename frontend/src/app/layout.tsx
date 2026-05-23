@@ -4,6 +4,7 @@ import "./globals.css";
 import AppShell from "@/components/AppShell";
 import AuthProvider from "@/components/AuthProvider";
 import { JobsProvider } from "@/components/JobsProvider";
+import { DriveExportsProvider } from "@/components/DriveExportsProvider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -32,7 +33,9 @@ export default function RootLayout({
       >
         <AuthProvider>
           <JobsProvider>
-            <AppShell>{children}</AppShell>
+            <DriveExportsProvider>
+              <AppShell>{children}</AppShell>
+            </DriveExportsProvider>
           </JobsProvider>
         </AuthProvider>
       </body>

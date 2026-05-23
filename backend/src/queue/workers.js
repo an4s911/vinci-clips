@@ -29,6 +29,8 @@ const {
     updateClipGeneration,
 } = require('../utils/backgroundJobs');
 const { toUnrecoverableIfNonRetryable } = require('./cancellation');
+const { resolveClipFilePath, patchItem } = require('../utils/driveExports');
+const { uploadFile } = require('../utils/googleDrive');
 const logger = require('../utils/logger');
 
 // Stages where YOUTUBE_AUTH_REQUIRED should not be retried — retrying when the IP is
@@ -52,6 +54,7 @@ function isYouTubeAuthChallengeError(error, stageName) {
 const NETWORK_CONCURRENCY = parseInt(process.env.PIPELINE_NETWORK_CONCURRENCY || '3', 10);
 const TRANSCRIBE_CONCURRENCY = parseInt(process.env.PIPELINE_TRANSCRIBE_CONCURRENCY || '2', 10);
 const MEDIA_CONCURRENCY = parseInt(process.env.PIPELINE_MEDIA_CONCURRENCY || '2', 10);
+const DRIVE_EXPORT_CONCURRENCY = parseInt(process.env.DRIVE_EXPORT_CONCURRENCY || '1', 10);
 const PIPELINE_LOCK_DURATION_MS = parseInt(process.env.PIPELINE_LOCK_DURATION_MS || '60000', 10);
 const PIPELINE_MAX_STALLED = parseInt(process.env.PIPELINE_MAX_STALLED || '3', 10);
 
@@ -333,18 +336,88 @@ function createMediaWorker(concurrency) {
     return worker;
 }
 
+// ─── Drive-export worker ───────────────────────────────────────────────────────
+// Each job uploads one clip to a Drive folder. Network-bound, so it runs on its
+// own queue (off the ffmpeg/media CPU cap). Item/export status is recomputed in
+// the failed/completed handlers so the UI reflects retries-exhausted accurately.
+
+function isStaleClipError(err) {
+    const m = err?.message || '';
+    return m.includes('not found') || m.includes('no longer') || m.includes('missing on disk');
+}
+
+function createDriveExportWorker(concurrency) {
+    const worker = new Worker(
+        'drive-export',
+        async (job) => {
+            const { exportId, itemIndex, transcriptId, clipIndex, videoId, folderId, name } = job.data;
+            logger.info(`Drive-export worker: item ${itemIndex} of export ${exportId}`, { attemptsMade: job.attemptsMade });
+
+            await patchItem(exportId, itemIndex, { status: 'running', error: null }).catch(() => {});
+
+            let filePath;
+            try {
+                filePath = await resolveClipFilePath({ transcriptId, clipIndex, videoId });
+            } catch (err) {
+                // Source clip vanished/changed — retrying won't help.
+                throw new UnrecoverableError(err.message);
+            }
+
+            await uploadFile({ filePath, name, folderId });
+            await patchItem(exportId, itemIndex, { status: 'done', error: null });
+        },
+        { connection, concurrency, lockDuration: PIPELINE_LOCK_DURATION_MS, maxStalledCount: PIPELINE_MAX_STALLED }
+    );
+
+    worker.on('completed', (job) => {
+        logger.info(`Drive-export completed: item ${job.data.itemIndex} of export ${job.data.exportId}`);
+    });
+
+    worker.on('failed', async (job, err) => {
+        if (!job) return;
+        const { exportId, itemIndex } = job.data;
+
+        // Stall-exhausted: BullMQ permanently failed the job; attemptsMade doesn't
+        // reflect stall count, so mark terminal directly.
+        if (isStallExhaustedError(err)) {
+            logger.error(`Drive-export stall-exhausted: item ${itemIndex} of export ${exportId}`, { error: err.message });
+            await patchItem(exportId, itemIndex, { status: 'failed', error: err.message }).catch(() => {});
+            return;
+        }
+
+        const unrecoverable = err instanceof UnrecoverableError || isStaleClipError(err);
+        const attemptsLeft = (job.opts?.attempts ?? 1) - (job.attemptsMade ?? 1);
+
+        if (!unrecoverable && attemptsLeft > 0) {
+            logger.warn('Drive-export attempt failed, will retry', { exportId, itemIndex, attemptsMade: job.attemptsMade, error: err.message });
+            return;
+        }
+
+        logger.error(`Drive-export item failed: ${itemIndex} of export ${exportId}`, { error: err.message });
+        await patchItem(exportId, itemIndex, { status: 'failed', error: err.message }).catch(() => {});
+    });
+
+    worker.on('error', (err) => {
+        logger.error('Drive-export worker error', { error: err.message });
+    });
+
+    return worker;
+}
+
 function startPipelineWorkers() {
     const networkWorker = createNetworkOrTranscribeWorker('pipeline-network', NETWORK_CONCURRENCY);
     const transcribeWorker = createNetworkOrTranscribeWorker('pipeline-transcribe', TRANSCRIBE_CONCURRENCY);
     const mediaWorker = createMediaWorker(MEDIA_CONCURRENCY);
+    const driveExportWorker = createDriveExportWorker(DRIVE_EXPORT_CONCURRENCY);
 
     logger.info('Pipeline workers started', {
         networkConcurrency: NETWORK_CONCURRENCY,
         transcribeConcurrency: TRANSCRIBE_CONCURRENCY,
         mediaConcurrency: MEDIA_CONCURRENCY,
+        driveExportConcurrency: DRIVE_EXPORT_CONCURRENCY,
     });
 
-    return [networkWorker, transcribeWorker, mediaWorker];
+    return [networkWorker, transcribeWorker, mediaWorker, driveExportWorker];
 }
 
 module.exports = { startPipelineWorkers };

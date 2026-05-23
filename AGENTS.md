@@ -77,6 +77,11 @@ See `/.env.example` for full list. Critical vars:
 | `PIPELINE_LOCK_DURATION_MS` | BullMQ job lock TTL in ms (default: `60000`). Longer than the stall check interval — renewed while the job runs. Lets long ffmpeg/whisper jobs survive a single restart. |
 | `PIPELINE_MAX_STALLED` | Max times a stalled job is re-claimed before being permanently failed (default: `3`). Prevents a single restart from permanently failing a long-running job. |
 | `RECONCILE_STALE_THRESHOLD_MIN` | Periodic reconcile: minutes before an orphaned row is acted on (default: `2`). Boot reconcile always ignores this threshold. |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | OAuth 2.0 web client used for Google Drive export. A service account is **not** used (it cannot upload to a personal My Drive). |
+| `GOOGLE_OAUTH_REDIRECT_URI` | Drive OAuth callback. Must match a registered redirect URI. Dev: `http://localhost:8080/clips/google-drive/auth/callback`; prod: `https://<APP_DOMAIN>/api/clips/google-drive/auth/callback`. |
+| `GOOGLE_OAUTH_SUCCESS_REDIRECT` | Optional. Where the browser lands after OAuth. Defaults to first `CORS_ORIGIN` + `/clips/settings/google-drive`. |
+| `DRIVE_EXPORT_CONCURRENCY` | Parallel clip uploads per export on the `drive-export` lane (default: `1`). |
+| `DRIVE_EXPORT_ATTEMPTS` | Retries per clip upload before it is marked failed (default: falls back to `PIPELINE_STAGE_ATTEMPTS`). |
 
 Python dependencies and models are baked into the Docker image. For local dev outside Docker, install faster-whisper and download a CT2 model directory manually.
 
@@ -89,6 +94,7 @@ Three BullMQ lanes:
 | `pipeline-network` | `PIPELINE_NETWORK_CONCURRENCY` (3) | extract-metadata, download-video |
 | `pipeline-transcribe` | `PIPELINE_TRANSCRIBE_CONCURRENCY` (2) | analyze (Gemini, network-bound) |
 | `pipeline-media` | `PIPELINE_MEDIA_CONCURRENCY` (2) | **transcribe**, convert-mp3, thumbnail, persist-files, probe-duration, clip-generate, clip-render |
+| `drive-export` | `DRIVE_EXPORT_CONCURRENCY` (1) | Google Drive clip uploads (network-bound; kept off the media CPU cap) |
 
 `pipeline-media` is the global CPU/ffmpeg cap — faster-whisper and ffmpeg share this concurrency limit.
 
@@ -101,6 +107,16 @@ After all clips generate, `maybeFinalizeTranscriptClips` checks the global `AppS
 Global config is stored in the `AppSetting` DB table (key/value JSON, single row). Managed via `GET`/`PUT /clips/settings/auto-bulk-edit`. Settings UI at `/clips/settings/auto-bulk-edit`.
 
 **Resilience:** auto renders are tagged `origin:'pipeline'` + `autoAttempts` counter. On server restart BullMQ stall re-claim resumes active renders. Queue drops are recovered by the reconciler (`reconcile.js`): orphaned auto renders are re-enqueued by rebuilding payloads from config + clip state (no user needed); capped at `MAX_AUTO_REQUEUE_ATTEMPTS` (3). Phase `bulk-edit` is NOT a `PIPELINE_STAGES` entry — it is owned by the deadlock sweep in `reconcile.js`, not by `enqueuePipeline`.
+
+### Google Drive Export
+
+Admins can export selected clips straight to a Google Drive folder. **Auth is OAuth 2.0 (web client), not the service account** — a service account cannot upload to a personal My Drive (0 storage quota). The admin connects their Google account once; the refresh token is stored in `AppSetting` key `googleDriveAuth`. Saved export folders live in `AppSetting` key `googleDriveFolders`. Both are managed by `backend/src/utils/googleDriveSettings.js`; Drive API calls (search/upload) are in `backend/src/utils/googleDrive.js`.
+
+Routes are under `/clips/google-drive/*` (`backend/src/routes/googleDrive.js`, admin-gated): OAuth `auth/url|callback|status|disconnect`, folder `folders[/search|/:id]`, and `export` + `exports[/:id]`.
+
+Each export is a `DriveExport` row (Prisma) with a per-clip `items` array. `POST /export` validates clips, creates the row, and enqueues **one `drive-export` job per clip**. The worker (`workers.js`) resolves the clip file via the same path-safety helper as downloads (`resolveClipFilePath` → `getVideoFilePath`) and streams it to Drive; filenames are `<videoId>.mp4`. Item/export status is recomputed atomically in `backend/src/utils/driveExports.js`.
+
+**Resilience:** multiple exports run concurrently. Stalled jobs are re-claimed by BullMQ on restart; queue-dropped items are re-enqueued by `reconcileDriveExports` in `reconcile.js` (capped per item). The frontend `DriveExportsProvider` polls `/exports?status=active` and renders a global tray on every page, so concurrent exports across transcripts/pages are all tracked.
 
 ### Adding a new pipeline stage
 
