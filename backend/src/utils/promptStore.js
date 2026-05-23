@@ -7,16 +7,53 @@ const PROMPT_KINDS = {
         label: 'Transcription',
         description: 'Sent to Gemini when transcribing each audio chunk.',
         vars: [],
+        varDetails: {},
     },
     clipAnalysis: {
         label: 'Clip Analysis',
         description: 'Sent to Gemini to identify the best viral clips from a transcript.',
         vars: ['candidateCount', 'minDuration', 'maxDuration', 'durationText', 'chunkText'],
+        varDetails: {
+            candidateCount: {
+                description: 'How many clip ideas Gemini should return for this transcript.',
+                example: '10',
+            },
+            minDuration: {
+                description: 'The shortest allowed clip length, in seconds.',
+                example: '20',
+            },
+            maxDuration: {
+                description: 'The longest allowed clip length, in seconds.',
+                example: '90',
+            },
+            durationText: {
+                description: 'The source video duration formatted as seconds text.',
+                example: '742.35 seconds',
+            },
+            chunkText: {
+                description: 'The timestamped transcript chunks Gemini must choose clips from.',
+                example: '[chunk-3] 82.1-111.4s | speakers=unknown | this is the moment...',
+            },
+        },
     },
     hookRegen: {
         label: 'Hook Regeneration',
         description: 'Sent to Gemini to generate a new on-screen hook text for a clip.',
         vars: ['currentHookText', 'clipTitle', 'clipTranscript'],
+        varDetails: {
+            currentHookText: {
+                description: 'The hook currently saved on the clip, used so Gemini can avoid repeating it.',
+                example: 'he instantly regretted this',
+            },
+            clipTitle: {
+                description: 'The existing clip title, used as context for the regenerated hook.',
+                example: 'Streamer wins with one HP',
+            },
+            clipTranscript: {
+                description: 'The transcript text covered by the selected clip.',
+                example: 'I thought the round was over, but then the last shot actually landed.',
+            },
+        },
     },
 };
 

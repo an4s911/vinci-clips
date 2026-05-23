@@ -24,6 +24,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { PromptVariables } from "../PromptVariables";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -38,6 +39,7 @@ interface PromptTemplate {
 interface KindMeta {
   label: string;
   vars: string[];
+  varDetails?: Record<string, { description: string; example: string }>;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -196,22 +198,11 @@ export default function PromptEditorPage() {
       </div>
 
       {kindMeta && kindMeta.vars.length > 0 && (
-        <div className="space-y-2">
-          <label className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-            Available variables — click to insert at cursor
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {kindMeta.vars.map((v) => (
-              <button
-                key={v}
-                onClick={() => insertVar(v)}
-                className="font-mono text-xs px-2.5 py-1 rounded-lg bg-muted hover:bg-primary/10 hover:text-primary border border-muted-foreground/10 transition-colors"
-              >
-                {`{{${v}}}`}
-              </button>
-            ))}
-          </div>
-        </div>
+        <PromptVariables
+          vars={kindMeta.vars}
+          varDetails={kindMeta.varDetails}
+          onInsert={insertVar}
+        />
       )}
 
       <div className="space-y-2">
