@@ -20,7 +20,6 @@ const sanitizeFilename = (value) => String(value || 'imported-video')
 const detectPlatform = (url) => {
     const hostname = new URL(url).hostname.toLowerCase();
     if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) return 'youtube';
-    if (hostname.includes('vimeo.com')) return 'vimeo';
     if (hostname.includes('instagram.com')) return 'instagram';
     if (hostname.includes('linkedin.com')) return 'linkedin';
     if (hostname.includes('tiktok.com')) return 'tiktok';

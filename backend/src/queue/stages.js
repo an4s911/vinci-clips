@@ -142,17 +142,6 @@ async function runExtractMetadata({ transcriptId, jobType, transcript }) {
     if (platform === 'youtube') {
         const meta = await extractYouTubeMetadata(url);
         videoInfo = { ...meta, title: sanitizeFilename(meta.title || 'youtube-import') };
-    } else if (platform === 'vimeo') {
-        const response = await axios.get(`https://vimeo.com/api/oembed.json?url=${encodeURIComponent(url)}`);
-        const vimeoIdMatch = url.match(/vimeo\.com\/(?:.*\/)?(\d+)/);
-        videoInfo = {
-            title: sanitizeFilename(response.data.title || 'vimeo-import'),
-            duration: response.data.duration || 0,
-            thumbnail: response.data.thumbnail_url,
-            platform: 'vimeo',
-            videoId: vimeoIdMatch?.[1] || null,
-        };
-        throw new Error('Direct download is not supported for Vimeo imports yet.');
     } else {
         throw new Error(`Platform ${platform} is not implemented.`);
     }

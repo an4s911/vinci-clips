@@ -391,7 +391,7 @@ export default function UploadClient() {
                   <div className="border-2 border-dashed border-muted rounded-lg p-8 text-center">
                     <Globe className="mx-auto h-12 w-12 text-muted-foreground" />
                     <p className="mt-4 text-muted-foreground">Import video from URL</p>
-                    <p className="text-xs text-muted-foreground mt-2">Supported platforms: YouTube, Vimeo</p>
+                    <p className="text-xs text-muted-foreground mt-2">Supported platforms: YouTube</p>
                     <div className="mt-4 flex gap-2">
                       <input
                         type="url"
