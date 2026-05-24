@@ -388,7 +388,8 @@ prune instead, and let BuildKit garbage-collect automatically (see
 docker buildx du
 
 # Trim cache to a 20GB cap (keeps recent layers incl. the model)
-docker builder prune --keep-storage 20GB -f
+# Docker 29+: flag is --reserved-space; older daemons used --keep-storage
+docker builder prune --reserved-space 20GB -f
 
 # Remove dangling (untagged) images and stopped containers only
 docker image prune -f
@@ -474,9 +475,9 @@ Create or edit `/etc/docker/daemon.json`:
   "builder": {
     "gc": {
       "enabled": true,
-      "defaultKeepStorage": "20GB",
+      "defaultReservedSpace": "20GB",
       "policy": [
-        { "keepStorage": "20GB", "all": true }
+        { "reservedSpace": "20GB", "maxUsedSpace": "30GB", "all": true }
       ]
     }
   }
@@ -486,6 +487,15 @@ Create or edit `/etc/docker/daemon.json`:
 ```bash
 sudo systemctl restart docker
 ```
+
+`reservedSpace` keeps at least this much cache (so recent layers — model, pip,
+npm — survive); `maxUsedSpace` is the hard ceiling the cache may never exceed.
+
+> **Docker version note:** these key names are for Docker 25+ / BuildKit's newer
+> GC schema (verified on Docker 29.x). Older daemons used `defaultKeepStorage`
+> and `keepStorage` instead — Docker 29 renamed them and ignores the old names,
+> so use `defaultReservedSpace` / `reservedSpace` here. Validate the file before
+> restarting: `sudo cat /etc/docker/daemon.json | python3 -m json.tool`.
 
 BuildKit now self-trims to ~20GB, keeping the most recently used layers (model,
 pip, npm) so rebuilds stay fast. You should no longer need scheduled
