@@ -58,6 +58,8 @@ Project runs via Docker Compose. Two stacks:
 - **Dev:** `docker-compose.yml` — backend, frontend, Postgres, Redis
 - **Prod:** `docker-compose.prod.yml` — same + nginx, Certbot
 
+**Build context is per-service** (`./backend`, `./frontend`), so each has its own `.dockerignore` (`backend/.dockerignore`, `frontend/.dockerignore`) — a root-level one does NOT apply. These keep `node_modules/`, `models/`, `uploads/`, etc. out of the build context; without them `COPY . .` bloats the backend image past 17GB. See `docker-setup.md` → "Image Size and Build Cache" for the BuildKit GC cap that replaces blind `docker system prune`.
+
 **The only env file that matters is `/.env` (root).** `/.env.example` is the template. In production, copy to `/.env.prod` and pass with `--env-file .env.prod`. `backend/.env` and `frontend/.env.local` are only relevant for running services outside Docker — ignore them for Docker-based work.
 
 ## Environment Variables

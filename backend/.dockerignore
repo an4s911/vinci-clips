@@ -1,0 +1,39 @@
+# Build context is ./backend, so this file (not the repo-root one) governs the backend image.
+
+# Dependencies — reinstalled via npm ci in the image
+node_modules/
+
+# Baked into the image by a dedicated build stage — never ship the host copy
+models/
+
+# Runtime data — must live in volumes, not the image
+uploads/
+storage/
+temp/
+tmp/
+cache/
+logs/
+*.log
+
+# Local artifacts
+sample.mp4
+gcp-service-account.json
+test-youtube.js
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# VCS / editor / docker
+.git
+.gitignore
+.vscode/
+.idea/
+Dockerfile*
+docker-compose*
+
+# Coverage / test
+coverage/
+.nyc_output/
+*.test.js

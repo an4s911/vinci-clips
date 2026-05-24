@@ -376,11 +376,25 @@ docker compose exec redis redis-cli -a "$REDIS_PASSWORD" ping
 ```
 
 **3. Out of disk space**
-```bash
-# Clean up unused Docker resources
-docker system prune -a
 
-# Remove old volumes
+Do **not** run `docker system prune -a` blindly. It wipes the entire build
+cache, including the faster-whisper model download stage (~1.6GB) — the next
+build then re-downloads the model and reruns every pip/npm step. Use a capped
+prune instead, and let BuildKit garbage-collect automatically (see
+[Image Size and Build Cache](#image-size-and-build-cache)).
+
+```bash
+# Inspect what build cache is consuming first
+docker buildx du
+
+# Trim cache to a 20GB cap (keeps recent layers incl. the model)
+docker builder prune --keep-storage 20GB -f
+
+# Remove dangling (untagged) images and stopped containers only
+docker image prune -f
+docker container prune -f
+
+# Remove old volumes (data loss — only if you know they are orphaned)
 docker volume prune
 ```
 
@@ -422,6 +436,71 @@ curl http://$APP_DOMAIN/api/health  # Backend through host Nginx
 | **Health Checks** | Basic | Full monitoring |
 | **Security** | Basic | Headers + rate limiting |
 | **Ports** | Exposed directly | Proxied through Nginx |
+
+## Image Size and Build Cache
+
+### Build context and `.dockerignore`
+
+Each image builds from its own subdirectory context — backend from `./backend`,
+frontend from `./frontend` (see `build.context` in the compose files). Docker
+**only reads a `.dockerignore` from the root of the build context**, so a single
+file at the repo root does *not* apply to these builds. Each service therefore
+has its own ignore file:
+
+- `backend/.dockerignore`
+- `frontend/.dockerignore`
+
+These exclude `node_modules/`, `models/`, `uploads/`, `storage/`, `temp/`,
+`cache/`, `logs/`, and secrets from the build context. Without them, `COPY . .`
+bakes runtime data and the host-side faster-whisper model into the image — the
+backend image balloons past 17GB and ships duplicate copies of the model.
+
+A correctly-built backend image is roughly **3.5–4GB**: base (ffmpeg + python +
+faster-whisper deps) + prod `node_modules` + the model copied once by the
+dedicated `faster-whisper-model` build stage.
+
+If you ever change what lives in `backend/` or `frontend/`, keep the ignore
+files current so runtime data never leaks into an image.
+
+### Cap the build cache automatically (recommended)
+
+BuildKit's cache grows with every build and is never trimmed on its own — on a
+small VPS it can reach 40–60GB in a few weeks. Instead of manually pruning (and
+losing the model layer), let the daemon garbage-collect to a fixed budget.
+Create or edit `/etc/docker/daemon.json`:
+
+```json
+{
+  "builder": {
+    "gc": {
+      "enabled": true,
+      "defaultKeepStorage": "20GB",
+      "policy": [
+        { "keepStorage": "20GB", "all": true }
+      ]
+    }
+  }
+}
+```
+
+```bash
+sudo systemctl restart docker
+```
+
+BuildKit now self-trims to ~20GB, keeping the most recently used layers (model,
+pip, npm) so rebuilds stay fast. You should no longer need scheduled
+`docker system prune` runs.
+
+### Rebuilding cleanly
+
+After pulling the ignore-file changes, rebuild once without cache so the bloated
+layers are dropped, then clear the old dangling image:
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml build --no-cache backend frontend
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+docker image prune -f
+```
 
 ## Maintenance
 

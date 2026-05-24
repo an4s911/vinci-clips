@@ -1,0 +1,22 @@
+# Build context is ./frontend, so this file governs the frontend image.
+
+node_modules/
+.next/
+out/
+build/
+dist/
+
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+.vscode/
+.idea/
+Dockerfile*
+docker-compose*
+
+tsconfig.tsbuildinfo
+coverage/
+*.log
