@@ -3,6 +3,7 @@ const fs = require('fs');
 const Transcript = require('../models/Transcript');
 const { createJobState, logVideoProcessing } = require('../utils/backgroundJobs');
 const { enqueuePipeline } = require('../queue/pipeline');
+const { validateUrl, detectPlatform } = require('../utils/videoUrl');
 
 const router = express.Router();
 
@@ -16,25 +17,6 @@ const sanitizeFilename = (value) => String(value || 'imported-video')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 140) || 'imported-video';
-
-const detectPlatform = (url) => {
-    const hostname = new URL(url).hostname.toLowerCase();
-    if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) return 'youtube';
-    if (hostname.includes('instagram.com')) return 'instagram';
-    if (hostname.includes('linkedin.com')) return 'linkedin';
-    if (hostname.includes('tiktok.com')) return 'tiktok';
-    if (hostname.includes('facebook.com') || hostname.includes('fb.com')) return 'facebook';
-    return 'unknown';
-};
-
-const validateUrl = (url) => {
-    try {
-        const urlObj = new URL(url);
-        return urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
-    } catch {
-        return false;
-    }
-};
 
 router.post('/url', async (req, res) => {
     const { url } = req.body;

@@ -280,6 +280,81 @@ PRD.md                Product requirements
 CLAUDE.md             Agent notes
 ```
 
+## External API
+
+Vinci Clips exposes a small machine-to-machine HTTP API so external services can trigger the video pipeline and poll progress without a browser session.
+
+### Authentication
+
+Generate an API key from the admin settings (session required):
+
+```bash
+# generate (plaintext shown once — save it)
+curl -s -X POST http://localhost:8080/clips/settings/api-key \
+  -H 'Cookie: vc.sid=<your-session-cookie>'
+
+# check status (never returns the key itself)
+curl -s http://localhost:8080/clips/settings/api-key \
+  -H 'Cookie: vc.sid=<your-session-cookie>'
+
+# revoke
+curl -s -X DELETE http://localhost:8080/clips/settings/api-key \
+  -H 'Cookie: vc.sid=<your-session-cookie>'
+```
+
+Pass the key on every external API request via either header:
+
+```
+X-Api-Key: vc_<key>
+Authorization: Bearer vc_<key>
+```
+
+The key is stored as a SHA-256 hash in the database (`AppSetting` key `externalApiKey`). It is rotatable at runtime without redeploying.
+
+### Trigger pipeline
+
+```bash
+POST /api/v1/pipeline
+Content-Type: application/json
+X-Api-Key: vc_<key>
+
+{ "url": "https://www.youtube.com/watch?v=..." }
+```
+
+Supported platforms: YouTube, Instagram, LinkedIn, TikTok, Facebook.
+
+Response `202`:
+
+```json
+{ "id": "<transcript-id>", "status": "uploading" }
+```
+
+### Poll progress
+
+```bash
+GET /api/v1/pipeline/:id
+X-Api-Key: vc_<key>
+```
+
+Response:
+
+```json
+{
+  "id": "...",
+  "status": "generating",
+  "phase": "clips",
+  "message": "Generating clips...",
+  "failureReason": null,
+  "failedStage": null,
+  "clipCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}
+```
+
+`status` values: `uploading → downloading → converting → transcribing → analyzing → generating → rendering → completed | failed | cancelled`.
+
+Poll until `status` is `completed` (or `failed`/`cancelled`). At `completed`, `clipCount` reflects the number of generated clips, which also appear in the normal admin UI.
+
 ## Runtime URLs
 
 Docker development:

@@ -11,7 +11,8 @@ import {
   ChevronRight,
   Sparkles,
   Zap,
-  HardDrive
+  HardDrive,
+  KeyRound,
 } from "lucide-react";
 
 const sidebarItems = [
@@ -44,6 +45,12 @@ const sidebarItems = [
     href: "/clips/settings/google-drive",
     icon: HardDrive,
     description: "Connect Drive and manage export folders"
+  },
+  {
+    title: "API Key",
+    href: "/clips/settings/api-key",
+    icon: KeyRound,
+    description: "Manage the external API key"
   },
 ];
 

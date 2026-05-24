@@ -9,7 +9,8 @@ require('dotenv').config();
 const logger = require('./utils/logger');
 const mainRoutes = require('./routes/index');
 const authRoutes = require('./routes/auth');
-const { loadUser, requireAuth } = require('./middleware/auth');
+const { loadUser, requireAuth, requireApiKey } = require('./middleware/auth');
+const externalRoutes = require('./routes/external');
 const { cleanupLocalMedia, getCleanupConfig } = require('./utils/mediaStorage');
 const { getCookieStatus, sendAlertWebhook, getMonitorConfig } = require('./services/cookieMonitor');
 const { startPipelineWorkers } = require('./queue/workers');
@@ -40,7 +41,7 @@ app.use((req, res, next) => {
         res.header('Access-Control-Allow-Origin', origin);
     }
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Key');
     res.header('Access-Control-Allow-Credentials', 'true');
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
@@ -109,6 +110,9 @@ async function startServer() {
             uptime: process.uptime(),
         });
     });
+
+    // External machine-to-machine API (API-key auth, no session required)
+    app.use('/api/v1', requireApiKey, externalRoutes);
 
     // Auth routes (login is public; logout/me/change-password check auth internally)
     app.use('/clips/auth', authRoutes);

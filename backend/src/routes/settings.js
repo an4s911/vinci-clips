@@ -2,6 +2,7 @@ const express = require('express');
 const prisma = require('../db/prisma');
 const { getAutoBulkEditConfig, setAutoBulkEditConfig } = require('../utils/appSettings');
 const { getCaptionStylesForClient, templateAllowsCaptions, templateAllowsHooks } = require('../utils/captioning');
+const { generateApiKey, getApiKeyMeta, revokeApiKey } = require('../utils/apiKeySettings');
 
 const router = express.Router();
 
@@ -151,6 +152,33 @@ router.put('/auto-bulk-edit', async (req, res) => {
         res.json({ config });
     } catch (error) {
         res.status(500).json({ error: 'Failed to save auto bulk-edit config.', details: error.message });
+    }
+});
+
+router.post('/api-key', async (req, res) => {
+    try {
+        const result = await generateApiKey();
+        res.status(201).json(result);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to generate API key.', details: error.message });
+    }
+});
+
+router.get('/api-key', async (req, res) => {
+    try {
+        const meta = await getApiKeyMeta();
+        res.json(meta ? meta : { configured: false });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to load API key status.', details: error.message });
+    }
+});
+
+router.delete('/api-key', async (req, res) => {
+    try {
+        await revokeApiKey();
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to revoke API key.', details: error.message });
     }
 });
 

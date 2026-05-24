@@ -19,6 +19,9 @@ Vinci Clips: AI video clipping platform. Upload/import videos → transcribe →
 |---|---|
 | `backend/src/index.js` | Express entry, middleware, route mounting |
 | `backend/src/routes/` | All API routes mounted under `/clips/` |
+| `backend/src/routes/external.js` | External API routes (`/api/v1`) — pipeline trigger + progress |
+| `backend/src/utils/apiKeySettings.js` | API key generate/verify/revoke (hashed in `AppSetting`) |
+| `backend/src/utils/videoUrl.js` | Shared `validateUrl` + `detectPlatform` |
 | `backend/src/queue/stages.js` | Pipeline stage definitions |
 | `backend/src/queue/workers.js` | BullMQ worker dispatch |
 | `backend/src/utils/whisperTranscription.js` | faster-whisper transcription driver |
@@ -140,6 +143,21 @@ Every clip video record (`ClipVideo`) has a `thumbnailUrl` field (e.g. `/uploads
 **Frontend:** all `<video>` elements on the detail page and bulk-download page use `preload="none"` (no streaming on mount) and `poster={thumbnailUrl}` so each clip shows its thumbnail immediately. Version videos are only mounted in the DOM when the "Versions" `<details>` is opened.
 
 Old clips generated before this change have no `thumbnailUrl` (null) — they show a blank video player until played, which is expected.
+
+## External API
+
+A machine-to-machine HTTP API lives at `/api/v1` (mounted in `index.js` before the session-gated `/clips` mount). It is independent of the browser session; auth is an API key sent as `X-Api-Key` or `Authorization: Bearer`.
+
+**Auth flow:**
+- `requireApiKey` middleware (`src/middleware/auth.js`) verifies the presented key against a SHA-256 hash stored in `AppSetting` key `externalApiKey` using `crypto.timingSafeEqual`. No open-fallback — missing key always 401s.
+- On success it resolves the oldest active admin user and attaches as `req.user`, so downstream code (`req.user.id`) works identically to session auth.
+- Key management (generate/status/revoke) is session-gated under `POST/GET/DELETE /clips/settings/api-key`.
+
+**Routes:**
+- `POST /api/v1/pipeline` `{ url }` — trigger URL import pipeline; returns `202 { id, status }`.
+- `GET /api/v1/pipeline/:id` — poll progress; returns `{ id, status, phase, message, failureReason, failedStage, clipCount, updatedAt }`.
+
+Transcripts created via the external API are owned by the admin user and appear normally in the admin UI. `validateUrl`/`detectPlatform` are shared with `src/routes/import.js` via `src/utils/videoUrl.js`.
 
 ## Important Rules
 
