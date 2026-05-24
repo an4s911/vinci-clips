@@ -51,14 +51,15 @@ RUN npm prune --omit=dev
 
 FROM base AS runner
 ENV NODE_ENV production
-COPY --from=prod-deps /app/node_modules ./node_modules
-COPY . .
-RUN mkdir -p /app/models
-COPY --from=faster-whisper-model /whisper-models/faster-whisper-large-v3-turbo /app/models/faster-whisper-large-v3-turbo
-RUN mkdir -p temp cache logs && \
-    addgroup --gid 1001 nodejs && \
+
+RUN addgroup --gid 1001 nodejs && \
     adduser --disabled-password --gecos '' --uid 1001 --gid 1001 nodejs && \
-    chown -R nodejs:nodejs /app
+    mkdir -p /app/models /app/temp /app/cache /app/logs && \
+    chown nodejs:nodejs /app/temp /app/cache /app/logs
+
+COPY --chown=nodejs:nodejs --from=prod-deps /app/node_modules ./node_modules
+COPY --chown=nodejs:nodejs . .
+COPY --from=faster-whisper-model /whisper-models/faster-whisper-large-v3-turbo /app/models/faster-whisper-large-v3-turbo
 
 USER nodejs
 
