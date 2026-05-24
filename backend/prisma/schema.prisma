@@ -43,6 +43,8 @@ model Transcript {
   processingJob    Json?
   analysisMetadata Json?
   reframeAssets    Json?
+
+  @@index([userId, createdAt])
 }
 
 model BlockedWord {

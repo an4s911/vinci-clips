@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { deleteLocalMedia, resolveLocalMediaPath } = require('./mediaStorage');
+const ffmpeg = require('fluent-ffmpeg');
 
 const CLIPS_DIR = path.join(__dirname, '..', '..', 'uploads', 'clips');
 const UPLOADS_DIR = path.join(__dirname, '..', '..', 'uploads');
@@ -66,6 +67,7 @@ function normalizeClipVideos(transcript, clip, clipIndex) {
             captions: video.captions || { enabled: false },
             hook: video.hook || { enabled: false },
             clipTimeline: Array.isArray(video.clipTimeline) ? video.clipTimeline : null,
+            thumbnailUrl: video.thumbnailUrl || null,
             title: video.title || clip.title
         })).filter(video => video.url)
         : [];
@@ -126,7 +128,8 @@ function createClipVideoRecord({
     aspectRatio = null,
     captions = { enabled: false },
     hook = { enabled: false },
-    clipTimeline = null
+    clipTimeline = null,
+    thumbnailUrl = null,
 }) {
     return {
         id: uuidv4(),
@@ -140,7 +143,8 @@ function createClipVideoRecord({
         aspectRatio,
         captions,
         hook,
-        clipTimeline
+        clipTimeline,
+        thumbnailUrl,
     };
 }
 
@@ -218,6 +222,9 @@ async function deleteClipVideoVersion(Transcript, transcript, clipIndex, videoId
     }
 
     await deleteLocalMedia(videoToDelete.url, { missingOk: true });
+    if (videoToDelete.thumbnailUrl) {
+        await deleteLocalMedia(videoToDelete.thumbnailUrl, { missingOk: true });
+    }
 
     const remainingVideos = videos.filter(video => video.id !== videoId);
     const nextPrimary = remainingVideos.length > 0
@@ -251,12 +258,40 @@ function makeTimestampedFilename(transcriptId, clipIndex, suffix = '') {
     return `${transcriptId}_clip_${clipIndex}${suffix}_${timestamp}_${random}.mp4`;
 }
 
+// Derives the thumbnail absolute path from a clip video's absolute path.
+function clipThumbnailPath(videoAbsPath) {
+    return videoAbsPath.replace(/\.[^.]+$/, '_thumbnail.jpg');
+}
+
+// Derives the thumbnail URL from a clip video's URL.
+function clipThumbnailUrl(videoUrl) {
+    if (!videoUrl) return null;
+    return videoUrl.replace(/\.[^.]+$/, '_thumbnail.jpg');
+}
+
+// Grabs the first frame of the clip video and saves it as a JPEG thumbnail.
+// Non-fatal — returns the thumbnail absolute path on success, null on failure.
+async function generateClipThumbnail(videoAbsPath) {
+    const thumbPath = clipThumbnailPath(videoAbsPath);
+    return new Promise((resolve) => {
+        ffmpeg(videoAbsPath)
+            .seekInput(0)
+            .outputOptions(['-vframes 1', '-q:v 2'])
+            .output(thumbPath)
+            .on('end', () => resolve(thumbPath))
+            .on('error', () => resolve(null))
+            .run();
+    });
+}
+
 module.exports = {
     CLIPS_DIR,
     appendPrimaryClipVideo,
     buildGeneratedClipsMap,
+    clipThumbnailUrl,
     createClipVideoRecord,
     deleteClipVideoVersion,
+    generateClipThumbnail,
     getPrimaryClipVideo,
     getVideoFilePath,
     makeTimestampedFilename,

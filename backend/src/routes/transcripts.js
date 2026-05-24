@@ -1,5 +1,6 @@
 const express = require('express');
 const Transcript = require('../models/Transcript');
+const { LIST_SELECT } = require('../localdb');
 const path = require('path');
 const {
     buildGeneratedClipsMap,
@@ -17,7 +18,7 @@ const router = express.Router();
 
 router.get('/', async (req, res) => {
     try {
-        const transcripts = await Transcript.find({ userId: req.user.id });
+        const transcripts = await Transcript.find({ userId: req.user.id }, { select: LIST_SELECT });
         res.status(200).json(transcripts);
     } catch (error) {
         res.status(500).send({ message: 'Failed to fetch transcripts: ' + error.message });
@@ -29,7 +30,7 @@ router.get('/failures', async (req, res) => {
     try {
         const { since } = req.query;
         const sinceDate = since ? new Date(since) : null;
-        const allTranscripts = await Transcript.find({ userId: req.user.id });
+        const allTranscripts = await Transcript.find({ userId: req.user.id }, { select: LIST_SELECT });
         const failures = allTranscripts.filter(t => {
             if (t.status !== 'failed') return false;
             if (sinceDate && t.failedAt && new Date(t.failedAt) <= sinceDate) return false;
@@ -131,6 +132,9 @@ router.delete('/:id/clips', async (req, res) => {
                     deletedMedia.push(await deleteLocalMedia(getVideoFilePath(video), { missingOk: true }));
                 } catch (error) {
                     deletedMedia.push(await deleteLocalMedia(video.url, { missingOk: true }));
+                }
+                if (video.thumbnailUrl) {
+                    await deleteLocalMedia(video.thumbnailUrl, { missingOk: true });
                 }
             }
         }

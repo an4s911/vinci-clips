@@ -8,6 +8,22 @@ const SCALAR_FIELDS = new Set([
     'status', 'failureReason', 'failedStage', 'platform', 'externalVideoId', 'importUrl', 'userId',
 ]);
 
+// Prisma select for list endpoints — returns all scalar metadata + processingJob,
+// but omits the heavy JSONB columns (transcript, clips, analysisMetadata, reframeAssets).
+const LIST_SELECT = {
+    id: true, createdAt: true, updatedAt: true,
+    userId: true, originalFilename: true, videoUrl: true, mp3Url: true,
+    thumbnailUrl: true, duration: true, status: true, failureReason: true,
+    failedAt: true, failedStage: true, platform: true, externalVideoId: true,
+    importUrl: true, processingJob: true,
+};
+
+// Prisma select for /clips/primary — needs clips JSONB but not the transcription text.
+const PRIMARY_SELECT = {
+    ...LIST_SELECT,
+    clips: true,
+};
+
 // Fields stored as DateTime columns — convert string → Date for writes
 const DATETIME_FIELDS = new Set(['failedAt']);
 
@@ -67,12 +83,13 @@ function toDoc(record) {
 }
 
 const Transcript = {
-    find: async (query = {}) => {
+    find: async (query = {}, opts = {}) => {
         const where = {};
         if (query.userId) where.userId = query.userId;
         const records = await prisma.transcript.findMany({
             where,
             orderBy: { createdAt: 'desc' },
+            ...(opts.select ? { select: opts.select } : {}),
         });
         return records.map(toDoc);
     },
@@ -143,4 +160,4 @@ const newTranscript = (data) => {
     return instance;
 };
 
-module.exports = { Transcript, newTranscript };
+module.exports = { Transcript, newTranscript, LIST_SELECT, PRIMARY_SELECT };

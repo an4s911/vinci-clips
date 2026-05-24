@@ -22,7 +22,9 @@ const {
 } = require('../utils/captioning');
 const {
     appendPrimaryClipVideo,
+    clipThumbnailUrl,
     createClipVideoRecord,
+    generateClipThumbnail,
     getPrimaryClipVideo,
     normalizeTranscriptClips,
 } = require('../utils/clipVideos');
@@ -358,6 +360,8 @@ async function runReframeRender(payload) {
     moveFileSafe(finalSourcePath, reframedDestPath);
     const reframedUrl = `/uploads/clips/reframed/${sanitizedOutputName}`;
 
+    const reframedThumbAbsPath = await generateClipThumbnail(path.resolve(reframedDestPath));
+
     if (shouldAttachToClip && Number.isInteger(parsedClipIndex)) {
         const normalizedClips = normalizeTranscriptClips(freshTranscript);
         const sourceClip = normalizedClips[parsedClipIndex];
@@ -375,6 +379,7 @@ async function runReframeRender(payload) {
             captions: captions?.enabled ? { enabled: true, style: captions.style } : { enabled: false },
             hook: normalizedHook.enabled ? normalizedHook : { enabled: false },
             clipTimeline: Array.isArray(clipTimeline) ? clipTimeline : sourceVideo?.clipTimeline || null,
+            thumbnailUrl: reframedThumbAbsPath ? clipThumbnailUrl(reframedUrl) : null,
         });
         await appendPrimaryClipVideo(Transcript, freshTranscript, parsedClipIndex, videoRecord);
     }
@@ -438,12 +443,16 @@ async function runCaptionRender(payload) {
     const destPath = path.join(destDir, outputFilename);
     moveFileSafe(outputPath, destPath);
 
+    const captionedUrl = `/uploads/captioned/${outputFilename}`;
+    const captionedThumbAbsPath = await generateClipThumbnail(path.resolve(destPath));
+
     const videoRecord = createClipVideoRecord({
         type: 'captioned',
-        url: `/uploads/captioned/${outputFilename}`,
+        url: captionedUrl,
         filename: outputFilename,
         captions: { enabled: true, style: result.resolvedStyle.id },
         hook: { enabled: hookEnabled, text: effectiveHookText, style: hookStyleId || captionStyleId },
+        thumbnailUrl: captionedThumbAbsPath ? clipThumbnailUrl(captionedUrl) : null,
     });
 
     await appendPrimaryClipVideo(Transcript, freshTranscript, parsedClipIndex, videoRecord);

@@ -1,5 +1,6 @@
 const express = require('express');
 const Transcript = require('../models/Transcript');
+const { PRIMARY_SELECT } = require('../localdb');
 const fs = require('fs');
 const path = require('path');
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
@@ -80,7 +81,8 @@ function buildPrimaryClipGroups(transcripts) {
                             platformName: primaryVideo.platformName,
                             aspectRatio: primaryVideo.aspectRatio,
                             captions: primaryVideo.captions,
-                            hook: primaryVideo.hook || { enabled: false }
+                            hook: primaryVideo.hook || { enabled: false },
+                            thumbnailUrl: primaryVideo.thumbnailUrl || null,
                         }
                     };
                 })
@@ -184,7 +186,7 @@ async function resolveSelectedPrimaryClips(selectedClips) {
 
 router.get('/primary', async (req, res) => {
     try {
-        const transcripts = await Transcript.find({});
+        const transcripts = await Transcript.find({ userId: req.user.id }, { select: PRIMARY_SELECT });
         const videos = buildPrimaryClipGroups(transcripts);
         const totalClips = videos.reduce((sum, video) => sum + video.clipCount, 0);
 
@@ -553,6 +555,9 @@ router.delete('/:transcriptId/:clipIndex', async (req, res) => {
                 deletedMedia.push(await deleteLocalMedia(getVideoFilePath(video), { missingOk: true }));
             } catch (error) {
                 deletedMedia.push(await deleteLocalMedia(video.url, { missingOk: true }));
+            }
+            if (video.thumbnailUrl) {
+                await deleteLocalMedia(video.thumbnailUrl, { missingOk: true });
             }
         }
 

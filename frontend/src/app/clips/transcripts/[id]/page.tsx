@@ -58,6 +58,7 @@ interface ClipVideo {
     url: string;
     filename: string;
     createdAt: string;
+    thumbnailUrl?: string | null;
     sourceVideoId: string | null;
     platform: string | null;
     platformName: string | null;
@@ -173,6 +174,7 @@ export default function TranscriptDetailPage() {
     const [sortOrder, setSortOrder] = useState<'virality' | 'order' | 'duration'>('virality');
     const [previewVideo, setPreviewVideo] = useState<{ clipIndex: number; video: ClipVideo } | null>(null);
     const [confirmDeleteVersion, setConfirmDeleteVersion] = useState<{ clipIndex: number; video: ClipVideo } | null>(null);
+    const [openVersionIndexes, setOpenVersionIndexes] = useState<Set<number>>(new Set());
     const params = useParams();
     const router = useRouter();
     const id = params.id;
@@ -814,6 +816,7 @@ export default function TranscriptDetailPage() {
                                 src={`${API_URL}${transcript.videoUrl}`}
                                 className="rounded-lg shadow-lg"
                                 style={{ maxHeight: '280px', maxWidth: '100%' }}
+                                preload="none"
                             />
                         )}
                         <details className="mt-4 rounded-lg border bg-muted/30">
@@ -939,6 +942,8 @@ export default function TranscriptDetailPage() {
                                                         src={`${API_URL}${primaryVideo.url}`}
                                                         className="w-full"
                                                         style={{ maxHeight: '220px' }}
+                                                        preload="none"
+                                                        poster={primaryVideo.thumbnailUrl ? `${API_URL}${primaryVideo.thumbnailUrl}` : undefined}
                                                     />
                                                 ) : (
                                                     <div className="flex items-center justify-center bg-slate-900 text-slate-500" style={{ height: '140px' }}>
@@ -1170,7 +1175,14 @@ export default function TranscriptDetailPage() {
 
                                                 {/* Previous versions — collapsible */}
                                                 {previousVersions.length > 0 && (
-                                                    <details className="rounded-md border border-slate-200 bg-white text-sm" onClick={e => e.stopPropagation()}>
+                                                    <details className="rounded-md border border-slate-200 bg-white text-sm" onClick={e => e.stopPropagation()} onToggle={e => {
+                                                        const open = (e.currentTarget as HTMLDetailsElement).open;
+                                                        setOpenVersionIndexes(prev => {
+                                                            const next = new Set(prev);
+                                                            open ? next.add(index) : next.delete(index);
+                                                            return next;
+                                                        });
+                                                    }}>
                                                         <summary className="cursor-pointer px-3 py-2 font-medium text-slate-800 select-none">
                                                             Versions ({previousVersions.length})
                                                         </summary>
@@ -1183,7 +1195,9 @@ export default function TranscriptDetailPage() {
                                                                         </span>
                                                                         <span className="text-slate-500">{formatVersionDate(version.createdAt)}</span>
                                                                     </div>
-                                                                    <video controls src={`${API_URL}${version.url}`} className="w-full rounded border bg-black" style={{ maxHeight: '100px' }} />
+                                                                    {openVersionIndexes.has(index) && (
+                                                                        <video controls src={`${API_URL}${version.url}`} className="w-full rounded border bg-black" style={{ maxHeight: '100px' }} preload="none" poster={version.thumbnailUrl ? `${API_URL}${version.thumbnailUrl}` : undefined} />
+                                                                    )}
                                                                     <div className="flex flex-wrap items-center gap-1">
                                                                         <Button size="sm" variant="outline" className="h-6 px-2 text-xs shrink-0" onClick={() => openCaptionModal([index], { [index]: version })}>
                                                                             Edit

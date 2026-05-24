@@ -4,7 +4,9 @@ const Transcript = require('../models/Transcript');
 const {
     CLIPS_DIR,
     appendPrimaryClipVideo,
+    clipThumbnailUrl,
     createClipVideoRecord,
+    generateClipThumbnail,
     makeTimestampedFilename,
 } = require('./clipVideos');
 const {
@@ -147,12 +149,14 @@ async function generateSingleClipInBackground(transcriptId, clipIndex) {
     if (!transcript || !transcript.clips?.[clipIndex]) {
         throw makeStaleResourceError('Clip no longer exists.');
     }
+    const thumbAbsPath = await generateClipThumbnail(outputPath);
     const videoRecord = createClipVideoRecord({
         type: 'generated',
         url: clipUrl,
         filename: outputFilename,
         hook: { enabled: false },
-        clipTimeline: mediaTimeline
+        clipTimeline: mediaTimeline,
+        thumbnailUrl: thumbAbsPath ? clipThumbnailUrl(clipUrl) : null,
     });
     await appendPrimaryClipVideo(Transcript, transcript, clipIndex, videoRecord);
     await completeClipGeneration(transcriptId, clipIndex, clipUrl);

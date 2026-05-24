@@ -20,6 +20,7 @@ interface PrimaryClipVideo {
     platformName: string | null;
     aspectRatio: string | null;
     captions: { enabled: boolean; style?: string };
+    thumbnailUrl?: string | null;
 }
 
 interface PrimaryClip {
@@ -311,8 +312,9 @@ export default function BulkClipDownloadPage() {
                                                         <video
                                                             src={`${API_URL}${clip.video.url}`}
                                                             className="aspect-video w-full object-contain"
-                                                            preload="metadata"
+                                                            preload="none"
                                                             muted
+                                                            poster={clip.video.thumbnailUrl ? `${API_URL}${clip.video.thumbnailUrl}` : undefined}
                                                         />
                                                         <div className={`absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border ${
                                                             selected

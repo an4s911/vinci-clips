@@ -128,6 +128,19 @@ Each export is a `DriveExport` row (Prisma) with a per-clip `items` array. `POST
 
 `runTranscribe` returns `{ transcript, model }` where `transcript` is a non-empty flat array of `{ start, end, text }` — one word per entry, `start`/`end` as `"MM:SS:mmm"` strings. Downstream `clipAnalysis.js` and `captioning.js` depend on this shape.
 
+### Per-clip thumbnails
+
+Every clip video record (`ClipVideo`) has a `thumbnailUrl` field (e.g. `/uploads/clips/xxx_thumbnail.jpg`). Thumbnails are generated via FFmpeg (first frame) immediately after the clip video file is written, inside `generateSingleClipInBackground` (`clipGeneration.js`) and both render paths in `renderJobs.js` (`runReframeRender`, `runCaptionRender`). Generation is non-fatal — if FFmpeg fails, `thumbnailUrl` is null and the clip still works.
+
+**Deletion:** thumbnail files are cleaned up everywhere clip videos are deleted:
+- `deleteClipVideoVersion` (`clipVideos.js`) — explicit delete alongside the video
+- `DELETE /:transcriptId/:clipIndex` and `DELETE /:id/clips` route handlers (`clips.js`, `transcripts.js`) — explicit delete in the video loop
+- `deleteTranscriptMedia` (`mediaStorage.js`) — automatic, because `collectStringReferences` recursively scans all `/uploads/` strings in the clips JSONB, which includes `thumbnailUrl`
+
+**Frontend:** all `<video>` elements on the detail page and bulk-download page use `preload="none"` (no streaming on mount) and `poster={thumbnailUrl}` so each clip shows its thumbnail immediately. Version videos are only mounted in the DOM when the "Versions" `<details>` is opened.
+
+Old clips generated before this change have no `thumbnailUrl` (null) — they show a blank video player until played, which is expected.
+
 ## Important Rules
 
 - **When code changes require documentation or introduce/remove env vars, update `README.md`, `AGENTS.md`, `.env.example`, and `backend/.env.example` automatically — do not wait to be asked.**
