@@ -128,6 +128,7 @@ interface Transcript {
     originalFilename: string;
     transcript: TranscriptSegment[];
     videoUrl?: string;
+    thumbnailUrl?: string | null;
     mp3Url?: string;
     clips: Clip[];
     createdAt: string;
@@ -817,6 +818,7 @@ export default function TranscriptDetailPage() {
                                 className="rounded-lg shadow-lg"
                                 style={{ maxHeight: '280px', maxWidth: '100%' }}
                                 preload="none"
+                                poster={transcript.thumbnailUrl ? `${API_URL}${transcript.thumbnailUrl}` : undefined}
                             />
                         )}
                         <details className="mt-4 rounded-lg border bg-muted/30">
