@@ -584,6 +584,67 @@ router.delete('/:transcriptId/:clipIndex', async (req, res) => {
     }
 });
 
+router.post('/:transcriptId/bulk-delete', async (req, res) => {
+    const { transcriptId } = req.params;
+    const { clipIndexes } = req.body;
+
+    try {
+        const transcript = await Transcript.findById(transcriptId);
+        if (!transcript) {
+            return res.status(404).json({ error: 'Transcript not found.' });
+        }
+
+        const normalizedClips = normalizeTranscriptClips(transcript);
+
+        if (!Array.isArray(clipIndexes) || clipIndexes.length === 0) {
+            return res.status(400).json({ error: 'clipIndexes must be a non-empty array.' });
+        }
+
+        const parsed = [...new Set(clipIndexes.map(i => Number.parseInt(i, 10)))];
+        if (parsed.some(i => !Number.isInteger(i) || i < 0 || i >= normalizedClips.length)) {
+            return res.status(400).json({ error: 'One or more clip indexes are invalid.' });
+        }
+
+        parsed.sort((a, b) => b - a);
+
+        for (const idx of parsed) {
+            await cancelClipQueues(transcriptId, idx, { types: ['clip-generate', 'clip-render'] });
+            const clip = normalizedClips[idx];
+            for (const video of clip.videos || []) {
+                try {
+                    await deleteLocalMedia(getVideoFilePath(video), { missingOk: true });
+                } catch {
+                    await deleteLocalMedia(video.url, { missingOk: true });
+                }
+                if (video.thumbnailUrl) {
+                    await deleteLocalMedia(video.thumbnailUrl, { missingOk: true });
+                }
+            }
+            normalizedClips.splice(idx, 1);
+        }
+
+        await removePendingQueueJobs({ transcriptId, types: ['clip-generate', 'clip-render'] });
+        const updatedTranscript = await Transcript.findByIdAndUpdate(transcriptId, {
+            clips: normalizedClips,
+            analysisMetadata: normalizedClips.length > 0 ? transcript.analysisMetadata : null,
+        });
+        const clips = normalizeTranscriptClips(updatedTranscript);
+
+        res.json({
+            success: true,
+            clips,
+            generatedClips: buildGeneratedClipsMap(clips),
+            deletedCount: parsed.length,
+        });
+    } catch (error) {
+        console.error('Error bulk-deleting clips:', error);
+        res.status(error.status || 500).json({
+            error: 'Failed to bulk-delete clips.',
+            details: error.message,
+        });
+    }
+});
+
 router.delete('/:transcriptId/:clipIndex/videos/:videoId', async (req, res) => {
     const { transcriptId, videoId } = req.params;
     const clipIndex = Number.parseInt(req.params.clipIndex, 10);

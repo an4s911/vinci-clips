@@ -182,6 +182,12 @@ export default function TranscriptDetailPage() {
     const [previewVideo, setPreviewVideo] = useState<{ clipIndex: number; video: ClipVideo } | null>(null);
     const [confirmDeleteVersion, setConfirmDeleteVersion] = useState<{ clipIndex: number; video: ClipVideo } | null>(null);
     const [openVersionIndexes, setOpenVersionIndexes] = useState<Set<number>>(new Set());
+    const [confirmDeleteClip, setConfirmDeleteClip] = useState<number | null>(null);
+    const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+    const [deletingClip, setDeletingClip] = useState<{ [index: number]: boolean }>({});
+    const [bulkDeleting, setBulkDeleting] = useState(false);
+    const [confirmDeleteTranscript, setConfirmDeleteTranscript] = useState(false);
+    const [deletingTranscript, setDeletingTranscript] = useState(false);
     const params = useParams();
     const router = useRouter();
     const id = params.id;
@@ -625,6 +631,66 @@ export default function TranscriptDetailPage() {
         }
     };
 
+    const deleteClipItem = (index: number) => {
+        setConfirmDeleteClip(index);
+    };
+
+    const handleConfirmDeleteClipItem = async () => {
+        if (!transcript || confirmDeleteClip === null) return;
+        const clipIndex = confirmDeleteClip;
+        setDeletingClip(prev => ({ ...prev, [clipIndex]: true }));
+        setError('');
+        try {
+            await axios.delete(`${API_URL}/clips/clips/${transcript._id}/${clipIndex}`);
+            await fetchTranscript();
+            setSelectedClipIndexes(prev => {
+                const next = new Set(prev);
+                next.delete(clipIndex);
+                return next;
+            });
+            setConfirmDeleteClip(null);
+        } catch (err: unknown) {
+            setError(getApiErrorMessage(err, 'Failed to delete clip.'));
+        } finally {
+            setDeletingClip(prev => ({ ...prev, [clipIndex]: false }));
+        }
+    };
+
+    const bulkDeleteSelected = () => {
+        setConfirmBulkDelete(true);
+    };
+
+    const handleConfirmBulkDelete = async () => {
+        if (!transcript) return;
+        setBulkDeleting(true);
+        setError('');
+        try {
+            await axios.post(`${API_URL}/clips/clips/${transcript._id}/bulk-delete`, {
+                clipIndexes: Array.from(selectedClipIndexes),
+            });
+            await fetchTranscript();
+            clearClipSelection();
+            setConfirmBulkDelete(false);
+        } catch (err: unknown) {
+            setError(getApiErrorMessage(err, 'Failed to delete selected clips.'));
+        } finally {
+            setBulkDeleting(false);
+        }
+    };
+
+    const handleDeleteTranscript = async () => {
+        if (!transcript) return;
+        setDeletingTranscript(true);
+        setError('');
+        try {
+            await axios.delete(`${API_URL}/clips/transcripts/${transcript._id}`);
+            router.push('/');
+        } catch (err: unknown) {
+            setError(getApiErrorMessage(err, 'Failed to delete transcript.'));
+            setDeletingTranscript(false);
+        }
+    };
+
     const openCaptionModal = (indexes: number[], sourceOverrides?: { [clipIndex: number]: ClipVideo }) => {
         setCaptionModalClipIndexes(indexes);
         setCaptionModalSourceOverrides(sourceOverrides || {});
@@ -745,7 +811,13 @@ export default function TranscriptDetailPage() {
 
     return (
         <main className="container mx-auto p-8">
-            <Button asChild className="mb-8"><a href="/">Back to Transcripts</a></Button>
+            <div className="flex items-center justify-between mb-8">
+                <Button asChild><a href="/">Back to Transcripts</a></Button>
+                <Button variant="destructive" size="sm" onClick={() => setConfirmDeleteTranscript(true)}>
+                    <Trash2 className="mr-1 h-4 w-4" />
+                    Delete transcript
+                </Button>
+            </div>
             <Card>
                 <CardHeader>
                     <CardTitle className="text-3xl">
@@ -975,6 +1047,10 @@ export default function TranscriptDetailPage() {
                                                 <HardDrive className="mr-1 h-3 w-3" />
                                                 Export to Drive ({selectedClipIndexes.size})
                                             </Button>
+                                            <Button size="sm" variant="destructive" onClick={bulkDeleteSelected} disabled={bulkDeleting}>
+                                                {bulkDeleting ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Trash2 className="mr-1 h-3 w-3" />}
+                                                Delete ({selectedClipIndexes.size})
+                                            </Button>
                                         </div>
                                     )}
                                 </div>
@@ -1007,7 +1083,7 @@ export default function TranscriptDetailPage() {
                                         const duration = clip.totalDuration || (clip.end || 0) - (clip.start || 0);
 
                                         return (
-                                        <div key={index} onClick={() => toggleClipSelect(index)} className={`flex flex-col rounded-xl border-2 bg-muted overflow-hidden transition-colors select-none ${isSelected ? 'border-primary' : 'border-transparent'}`}>
+                                        <div key={index} onClick={() => toggleClipSelect(index)} className={`group flex flex-col rounded-xl border-2 bg-muted overflow-hidden transition-colors select-none ${isSelected ? 'border-primary' : 'border-transparent'}`}>
 
                                             {/* Video / placeholder */}
                                             <div className="relative bg-black" onClick={e => e.stopPropagation()}>
@@ -1053,7 +1129,17 @@ export default function TranscriptDetailPage() {
 
                                                 {/* Title + meta */}
                                                 <div>
-                                                    <div className="font-semibold text-sm leading-snug line-clamp-2">{clip.title}</div>
+                                                    <div className="flex items-start justify-between gap-1">
+                                                        <div className="font-semibold text-sm leading-snug line-clamp-2 min-w-0">{clip.title}</div>
+                                                        <button
+                                                            onClick={e => { e.stopPropagation(); deleteClipItem(index); }}
+                                                            className="shrink-0 rounded p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-red-600 hover:bg-red-50 transition-all"
+                                                            title="Delete entire clip"
+                                                            disabled={deletingClip[index]}
+                                                        >
+                                                            <Trash2 className="h-3.5 w-3.5" />
+                                                        </button>
+                                                    </div>
                                                     <div className="flex flex-wrap items-center gap-1.5 mt-1">
                                                         <span className="text-xs text-muted-foreground">{formatTime(duration)}</span>
                                                         {clip.tags?.map(tag => (
@@ -1487,6 +1573,68 @@ export default function TranscriptDetailPage() {
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
+            <AlertDialog open={confirmDeleteClip !== null} onOpenChange={(open) => !open && setConfirmDeleteClip(null)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Clip</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Delete this clip and all its generated videos? This cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={confirmDeleteClip !== null && !!deletingClip[confirmDeleteClip]}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={(e) => { e.preventDefault(); handleConfirmDeleteClipItem(); }}
+                            className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                            disabled={confirmDeleteClip !== null && !!deletingClip[confirmDeleteClip]}
+                        >
+                            {confirmDeleteClip !== null && deletingClip[confirmDeleteClip] ? "Deleting..." : "Delete Clip"}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
+            <AlertDialog open={confirmBulkDelete} onOpenChange={(open) => !open && setConfirmBulkDelete(false)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Selected Clips</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Delete {selectedClipIndexes.size} selected clip{selectedClipIndexes.size !== 1 ? 's' : ''} and all their generated videos? This cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={bulkDeleting}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={(e) => { e.preventDefault(); handleConfirmBulkDelete(); }}
+                            className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                            disabled={bulkDeleting}
+                        >
+                            {bulkDeleting ? "Deleting..." : `Delete ${selectedClipIndexes.size} Clip${selectedClipIndexes.size !== 1 ? 's' : ''}`}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
+            <AlertDialog open={confirmDeleteTranscript} onOpenChange={(open) => !open && setConfirmDeleteTranscript(false)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Transcript</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Delete this transcript and all its clips and media? This cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={deletingTranscript}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={(e) => { e.preventDefault(); handleDeleteTranscript(); }}
+                            className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                            disabled={deletingTranscript}
+                        >
+                            {deletingTranscript ? "Deleting..." : "Delete Transcript"}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </main>
     );
-} 
+}
