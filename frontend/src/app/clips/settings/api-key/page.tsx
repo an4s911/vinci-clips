@@ -218,9 +218,17 @@ export default function ApiKeySettingsPage() {
         <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Usage</h3>
 
         <div className="space-y-2 text-sm">
-          <p className="text-muted-foreground">Pass the key on every request via either header:</p>
-          <pre className="rounded-lg bg-muted px-4 py-3 text-xs font-mono overflow-x-auto">{`X-Api-Key: <your-key>
-Authorization: Bearer <your-key>`}</pre>
+          <p className="text-muted-foreground">Pass the key on every request using one of these headers:</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Option A</p>
+              <pre className="rounded-lg bg-muted px-4 py-3 text-xs font-mono overflow-x-auto">{`X-Api-Key: <your-key>`}</pre>
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Option B</p>
+              <pre className="rounded-lg bg-muted px-4 py-3 text-xs font-mono overflow-x-auto">{`Authorization: Bearer <your-key>`}</pre>
+            </div>
+          </div>
         </div>
 
         <div className="space-y-4">
