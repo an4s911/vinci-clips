@@ -28,6 +28,7 @@ interface ProcessingJob {
 
 interface Transcript {
     _id: string;
+    title?: string | null;
     originalFilename: string;
     createdAt: string;
     status?: string;
@@ -146,7 +147,7 @@ export default function TranscriptsPage() {
                         <CardHeader>
                             <div className="flex items-start justify-between gap-2">
                                 <CardTitle className="truncate pr-1 flex-1 w-0 text-base">
-                                    {transcript.originalFilename}
+                                    {transcript.title || transcript.originalFilename}
                                 </CardTitle>
                                 <div className="flex items-center gap-1 flex-shrink-0">
                                     {getStatusIcon(transcript.status)}

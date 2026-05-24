@@ -127,6 +127,12 @@ Each export is a `DriveExport` row (Prisma) with a per-clip `items` array. `POST
 2. Implement `run(ctx)` and `isComplete(transcript, jobType)`
 3. Assign `lane`: `network`, `transcribe`, or `media`
 
+### Transcript title vs filename
+
+`Transcript.title` is the human-readable display name — raw YouTube video title (set at `extract-metadata` stage in `stages.js`) or uploaded filename without extension (set in `upload.js`). It is editable via `PUT /clips/transcripts/:id { title }`. Falls back to `originalFilename` in the UI for old records.
+
+`originalFilename` retains its filesystem role: the on-disk `.mp4` name for YouTube imports (`<sanitized-title>-<id>.mp4`) and the raw uploaded filename. Used for file-path resolution (`stages.js:71,303`), zip download names (`clips.js:228`), and reframe output names (`reframe.js:378`). Never use `title` for file path work.
+
 ### Transcript output contract
 
 `runTranscribe` returns `{ transcript, model }` where `transcript` is a non-empty flat array of `{ start, end, text }` — one word per entry, `start`/`end` as `"MM:SS:mmm"` strings. Downstream `clipAnalysis.js` and `captioning.js` depend on this shape.

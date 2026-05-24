@@ -139,8 +139,10 @@ async function runExtractMetadata({ transcriptId, jobType, transcript }) {
     await assertTranscriptNotCancelled(transcriptId, jobType);
 
     let videoInfo;
+    let rawTitle = null;
     if (platform === 'youtube') {
         const meta = await extractYouTubeMetadata(url);
+        rawTitle = meta.title || null;
         videoInfo = { ...meta, title: sanitizeFilename(meta.title || 'youtube-import') };
     } else {
         throw new Error(`Platform ${platform} is not implemented.`);
@@ -149,6 +151,7 @@ async function runExtractMetadata({ transcriptId, jobType, transcript }) {
     const originalFilename = `${videoInfo.title}-${transcriptId}.mp4`;
     await Transcript.findByIdAndUpdate(transcriptId, {
         originalFilename,
+        title: rawTitle,
         duration: videoInfo.duration,
         externalVideoId: videoInfo.videoId,
     });

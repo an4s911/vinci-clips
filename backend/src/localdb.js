@@ -4,7 +4,7 @@ const { publicFailureReasonForTranscript, publicProcessingJob } = require('./uti
 
 // Fields stored as scalar columns in Postgres
 const SCALAR_FIELDS = new Set([
-    'originalFilename', 'videoUrl', 'mp3Url', 'thumbnailUrl', 'duration',
+    'title', 'originalFilename', 'videoUrl', 'mp3Url', 'thumbnailUrl', 'duration',
     'status', 'failureReason', 'failedStage', 'platform', 'externalVideoId', 'importUrl', 'userId',
 ]);
 
@@ -12,7 +12,7 @@ const SCALAR_FIELDS = new Set([
 // but omits the heavy JSONB columns (transcript, clips, analysisMetadata, reframeAssets).
 const LIST_SELECT = {
     id: true, createdAt: true, updatedAt: true,
-    userId: true, originalFilename: true, videoUrl: true, mp3Url: true,
+    userId: true, title: true, originalFilename: true, videoUrl: true, mp3Url: true,
     thumbnailUrl: true, duration: true, status: true, failureReason: true,
     failedAt: true, failedStage: true, platform: true, externalVideoId: true,
     importUrl: true, processingJob: true,
@@ -57,6 +57,7 @@ function toDoc(record) {
     const doc = {
         _id: record.id,
         createdAt: record.createdAt instanceof Date ? record.createdAt.toISOString() : record.createdAt,
+        title: record.title,
         originalFilename: record.originalFilename,
         videoUrl: record.videoUrl,
         mp3Url: record.mp3Url,

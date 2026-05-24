@@ -25,6 +25,7 @@ model Transcript {
   userId           String
   user             User      @relation(fields: [userId], references: [id])
 
+  title            String?
   originalFilename String?
   videoUrl         String?
   mp3Url           String?

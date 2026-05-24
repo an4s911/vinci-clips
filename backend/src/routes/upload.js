@@ -29,6 +29,7 @@ router.post('/file', upload.single('video'), async (req, res) => {
 
     const transcript = await Transcript.create({
         userId: req.user.id,
+        title: req.file.originalname.replace(/\.[^./\\]+$/, ''),
         originalFilename: req.file.originalname,
         transcript: [],
         status: 'uploading',

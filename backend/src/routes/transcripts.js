@@ -70,10 +70,16 @@ router.put('/:id', async (req, res) => {
         const existing = await Transcript.findById(req.params.id, { userId: req.user.id });
         if (!existing) return res.status(404).send('Transcript not found');
 
-        const { clips } = req.body;
-        const updatePayload = { clips };
-        if (Array.isArray(clips) && clips.length === 0) {
-            updatePayload.analysisMetadata = null;
+        const { clips, title } = req.body;
+        const updatePayload = {};
+        if (clips !== undefined) {
+            updatePayload.clips = clips;
+            if (Array.isArray(clips) && clips.length === 0) {
+                updatePayload.analysisMetadata = null;
+            }
+        }
+        if (typeof title === 'string' && title.trim()) {
+            updatePayload.title = title.trim();
         }
 
         const transcript = await Transcript.findByIdAndUpdate(req.params.id, updatePayload);

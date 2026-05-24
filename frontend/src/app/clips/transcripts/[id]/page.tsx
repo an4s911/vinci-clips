@@ -10,7 +10,8 @@ import { useParams, useRouter } from 'next/navigation';
 import SmartCropModal from '@/components/SmartCropModal';
 import BulkEditModal from '@/components/BulkEditModal';
 import DriveExportModal from '@/components/DriveExportModal';
-import { AlertCircle, CheckSquare, Download, Eye, ExternalLink, Flame, HardDrive, Loader2, RefreshCcw, Save, Square, StopCircle, Trash2, Wand2 } from 'lucide-react';
+import { AlertCircle, CheckSquare, Download, Eye, ExternalLink, Flame, HardDrive, Loader2, Pencil, RefreshCcw, Save, Square, StopCircle, Trash2, Wand2, X } from 'lucide-react';
+import { Input } from '@/components/ui/input';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -125,7 +126,9 @@ interface Clip {
 
 interface Transcript {
     _id: string;
+    title?: string | null;
     originalFilename: string;
+    importUrl?: string | null;
     transcript: TranscriptSegment[];
     videoUrl?: string;
     thumbnailUrl?: string | null;
@@ -155,6 +158,9 @@ export default function TranscriptDetailPage() {
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
     const [analyzing, setAnalyzing] = useState(false);
+    const [editingTitle, setEditingTitle] = useState(false);
+    const [titleDraft, setTitleDraft] = useState('');
+    const [savingTitle, setSavingTitle] = useState(false);
     const [clearingClips, setClearingClips] = useState(false);
     const [generatingClips, setGeneratingClips] = useState<{[key: number]: boolean}>({});
     const [generatedClips, setGeneratedClips] = useState<NonNullable<Transcript['generatedClips']>>({});
@@ -690,6 +696,31 @@ export default function TranscriptDetailPage() {
         }
     };
 
+    const startEditTitle = () => {
+        if (!transcript) return;
+        setTitleDraft(transcript.title || transcript.originalFilename);
+        setEditingTitle(true);
+    };
+
+    const cancelEditTitle = () => {
+        setEditingTitle(false);
+        setTitleDraft('');
+    };
+
+    const saveTitle = async () => {
+        if (!transcript || !titleDraft.trim() || savingTitle) return;
+        setSavingTitle(true);
+        try {
+            await axios.put(`${API_URL}/clips/transcripts/${transcript._id}`, { title: titleDraft.trim() });
+            await fetchTranscript();
+            setEditingTitle(false);
+        } catch {
+            // silently ignore — title stays unchanged
+        } finally {
+            setSavingTitle(false);
+        }
+    };
+
     const hasTranscriptContent = Array.isArray(transcript?.transcript) && transcript.transcript.length > 0;
     const canRetryContinue = transcript?.status === 'failed' || transcript?.status === 'cancelled';
     const canAnalyzeTranscript = hasTranscriptContent;
@@ -717,9 +748,51 @@ export default function TranscriptDetailPage() {
             <Button asChild className="mb-8"><a href="/">Back to Transcripts</a></Button>
             <Card>
                 <CardHeader>
-                    <CardTitle className="text-3xl">{transcript.originalFilename}</CardTitle>
+                    <CardTitle className="text-3xl">
+                        {editingTitle ? (
+                            <div className="flex items-center gap-2">
+                                <Input
+                                    className="text-3xl font-bold h-auto py-0 border-0 border-b rounded-none focus-visible:ring-0 focus-visible:border-b-2 px-0"
+                                    value={titleDraft}
+                                    onChange={e => setTitleDraft(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') cancelEditTitle(); }}
+                                    autoFocus
+                                />
+                                <button onClick={saveTitle} disabled={savingTitle} className="text-muted-foreground hover:text-foreground disabled:opacity-40" aria-label="Save title">
+                                    {savingTitle ? <Loader2 className="h-5 w-5 animate-spin" /> : <Save className="h-5 w-5" />}
+                                </button>
+                                <button onClick={cancelEditTitle} className="text-muted-foreground hover:text-foreground" aria-label="Cancel">
+                                    <X className="h-5 w-5" />
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="flex items-center gap-2 group">
+                                <span>{transcript.title || transcript.originalFilename}</span>
+                                <button
+                                    onClick={startEditTitle}
+                                    className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity hover:text-foreground"
+                                    aria-label="Edit title"
+                                >
+                                    <Pencil className="h-4 w-4" />
+                                </button>
+                            </div>
+                        )}
+                    </CardTitle>
                     <CardDescription>
                         Processed on {new Date(transcript.createdAt).toLocaleString()}
+                        {transcript.importUrl && (
+                            <span className="ml-3">
+                                Source:{' '}
+                                <a
+                                    href={transcript.importUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="underline underline-offset-2 hover:text-foreground max-w-xs inline-block truncate align-bottom"
+                                >
+                                    {transcript.importUrl}
+                                </a>
+                            </span>
+                        )}
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-8">
