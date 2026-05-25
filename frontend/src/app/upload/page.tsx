@@ -42,6 +42,7 @@ interface ProcessingJob {
 
 interface Transcript {
   _id: string;
+  title?: string | null;
   originalFilename: string;
   createdAt: string;
   status?: 'uploading' | 'downloading' | 'converting' | 'transcribing' | 'analyzing' | 'generating' | 'completed' | 'failed' | 'cancelled';
@@ -457,7 +458,7 @@ export default function UploadClient() {
                     <CardHeader className="pb-3">
                       <div className="flex items-start justify-between">
                         <div className="flex items-center w-0 flex-1">
-                          <CardTitle className="text-lg truncate pr-2">{transcript.originalFilename}</CardTitle>
+                          <CardTitle className="text-lg truncate pr-2">{transcript.title || transcript.originalFilename}</CardTitle>
                           <Trash2
                             className="h-4 w-4 text-red-500 cursor-pointer mr-2 hover:text-red-700 flex-shrink-0"
                             onClick={(e) => handleDeleteClick(transcript._id, transcript.originalFilename, e)}
