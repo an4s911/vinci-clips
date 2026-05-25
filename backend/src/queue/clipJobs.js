@@ -6,6 +6,7 @@
 
 const { Queue } = require('bullmq');
 const connection = require('./connection');
+const { bumpTranscriptExpiry } = require('../utils/transcriptTtl');
 
 // Creates its own Queue instance — multiple instances pointing to the same
 // Redis-backed queue is fine in BullMQ.
@@ -53,6 +54,8 @@ async function enqueueClipGenerate({ transcriptId, clipIndex, origin = 'manual',
         }
     );
 
+    await bumpTranscriptExpiry(transcriptId);
+
     return jobId;
 }
 
@@ -73,6 +76,8 @@ async function enqueueClipRender({ transcriptId, clipIndex, kind, payload, prior
             removeOnFail: { count: 100 },
         }
     );
+
+    await bumpTranscriptExpiry(transcriptId);
 
     return jobId;
 }

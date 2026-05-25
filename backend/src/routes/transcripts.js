@@ -13,6 +13,7 @@ const {
     removePendingQueueJobs,
 } = require('../queue/cancellation');
 const { deleteLocalMedia, deleteTranscriptMedia, deleteTranscriptTransientMedia } = require('../utils/mediaStorage');
+const { deleteTranscriptCompletely } = require('../utils/transcriptDeletion');
 
 const router = express.Router();
 
@@ -173,15 +174,7 @@ router.delete('/:id', async (req, res) => {
             return res.status(404).json({ message: 'Transcript not found' });
         }
 
-        await cancelTranscriptQueues(id, {
-            jobType: transcript.importUrl ? 'import' : 'upload',
-        });
-
-        const deletedMedia = [
-            ...await deleteTranscriptMedia(transcript),
-            ...await deleteTranscriptTransientMedia(id),
-        ];
-        await Transcript.findByIdAndDelete(id);
+        const deletedMedia = await deleteTranscriptCompletely(transcript);
 
         res.status(200).json({
             message: 'Transcript and associated files deleted successfully',

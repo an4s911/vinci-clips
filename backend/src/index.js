@@ -12,6 +12,9 @@ const authRoutes = require('./routes/auth');
 const { loadUser, requireAuth, requireApiKey } = require('./middleware/auth');
 const externalRoutes = require('./routes/external');
 const { cleanupLocalMedia, getCleanupConfig } = require('./utils/mediaStorage');
+const { deleteTranscriptCompletely } = require('./utils/transcriptDeletion');
+const Transcript = require('./models/Transcript');
+const prisma = require('./db/prisma');
 const { getCookieStatus, sendAlertWebhook, getMonitorConfig } = require('./services/cookieMonitor');
 const { startPipelineWorkers } = require('./queue/workers');
 const { reconcileQueue, startReconcileScheduler } = require('./queue/reconcile');
@@ -137,6 +140,7 @@ async function startServer() {
         await reconcileQueue({ boot: true });
         startReconcileScheduler();
         startMediaCleanupScheduler();
+        startTranscriptExpiryScheduler();
         startCookieMonitor();
     } catch (error) {
         logger.logError(error, { context: 'server_startup' });
@@ -167,6 +171,46 @@ function startMediaCleanupScheduler() {
     const intervalMs = config.intervalHours * 60 * 60 * 1000;
     if (intervalMs > 0) {
         setInterval(runCleanup, intervalMs).unref();
+    }
+}
+
+function startTranscriptExpiryScheduler() {
+    const intervalMin = parseInt(process.env.TRANSCRIPT_EXPIRY_SWEEP_MIN || '30', 10);
+    const intervalMs = intervalMin * 60 * 1000;
+
+    const runSweep = async () => {
+        try {
+            const now = new Date();
+            const expired = await prisma.transcript.findMany({
+                where: { expiresAt: { lte: now } },
+                select: {
+                    id: true, importUrl: true, videoUrl: true, mp3Url: true,
+                    thumbnailUrl: true, clips: true, reframeAssets: true,
+                    originalFilename: true, title: true,
+                },
+            });
+            if (expired.length === 0) return;
+
+            let deleted = 0;
+            for (const row of expired) {
+                // toDoc-compatible shape — only fields deleteTranscriptCompletely needs
+                const transcript = { _id: row.id, ...row };
+                try {
+                    await deleteTranscriptCompletely(transcript);
+                    deleted++;
+                } catch (err) {
+                    logger.warn(`Expiry sweep: failed to delete transcript ${row.id}: ${err.message}`);
+                }
+            }
+            logger.info(`Expiry sweep: deleted ${deleted}/${expired.length} expired transcripts.`);
+        } catch (err) {
+            logger.warn(`Expiry sweep failed: ${err.message}`);
+        }
+    };
+
+    setImmediate(runSweep);
+    if (intervalMs > 0) {
+        setInterval(runSweep, intervalMs).unref();
     }
 }
 

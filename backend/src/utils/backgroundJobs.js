@@ -2,6 +2,7 @@ const { exec, execFile } = require('child_process');
 const path = require('path');
 const Transcript = require('../models/Transcript');
 const logger = require('./logger');
+const { nextExpiry } = require('./transcriptTtl');
 const { withTranscriptWriteLock } = require('./clipVideos');
 
 const activeTranscriptJobs = new Map();
@@ -80,7 +81,7 @@ function logVideoProcessing(transcriptId, status, message, metadata = {}) {
     logger.logVideoProcessing(transcriptId, status, message, metadata);
 }
 
-async function updateTranscriptJob(transcriptId, updates = {}, metadata = {}) {
+async function updateTranscriptJob(transcriptId, updates = {}, metadata = {}, extraTopLevel = {}) {
     const transcript = await Transcript.findById(transcriptId);
     if (!transcript) return null;
 
@@ -93,6 +94,7 @@ async function updateTranscriptJob(transcriptId, updates = {}, metadata = {}) {
 
     const payload = {
         processingJob,
+        ...extraTopLevel,
     };
 
     if (updates.phase || updates.status) {
@@ -139,7 +141,7 @@ async function completeTranscriptJob(transcriptId, jobType, progressMessage = 'P
         completedAt: nowIso(),
         error: null,
         errorCode: null,
-    }, { jobType, phase: 'completed' });
+    }, { jobType, phase: 'completed' }, { expiresAt: nextExpiry() });
 }
 
 async function failTranscriptJob(transcriptId, jobType, error, progressMessage = 'Processing failed.') {

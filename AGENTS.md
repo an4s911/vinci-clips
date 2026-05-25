@@ -82,6 +82,8 @@ See `/.env.example` for full list. Critical vars:
 | `PIPELINE_LOCK_DURATION_MS` | BullMQ job lock TTL in ms (default: `60000`). Longer than the stall check interval — renewed while the job runs. Lets long ffmpeg/whisper jobs survive a single restart. |
 | `PIPELINE_MAX_STALLED` | Max times a stalled job is re-claimed before being permanently failed (default: `3`). Prevents a single restart from permanently failing a long-running job. |
 | `RECONCILE_STALE_THRESHOLD_MIN` | Periodic reconcile: minutes before an orphaned row is acted on (default: `2`). Boot reconcile always ignores this threshold. |
+| `TRANSCRIPT_TTL_HOURS` | Hours until a transcript and all its media auto-delete after the pipeline finishes (default: `24`). The window resets on every clip generate/render/reframe/bulk-edit enqueue. Existing rows are backfilled to `migration_time + 24h` on first deploy. |
+| `TRANSCRIPT_EXPIRY_SWEEP_MIN` | How often (in minutes) the expiry sweep runs (default: `30`). Set to `0` to disable. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | OAuth 2.0 web client used for Google Drive export. A service account is **not** used (it cannot upload to a personal My Drive). |
 | `GOOGLE_OAUTH_REDIRECT_URI` | Drive OAuth callback. Must match a registered redirect URI. Dev: `http://localhost:8080/clips/google-drive/auth/callback`; prod: `https://<APP_DOMAIN>/api/clips/google-drive/auth/callback`. |
 | `GOOGLE_OAUTH_SUCCESS_REDIRECT` | Optional. Where the browser lands after OAuth. Defaults to first `CORS_ORIGIN` + `/clips/settings/google-drive`. |
@@ -170,6 +172,7 @@ Transcripts created via the external API are owned by the admin user and appear 
 ## Important Rules
 
 - **When code changes require documentation or introduce/remove env vars, update `README.md`, `AGENTS.md`, `.env.example`, and `backend/.env.example` automatically — do not wait to be asked.**
+- **When introducing new env vars for any service, also add them to `docker-compose.yml` (local dev) and `docker-compose.prod.yml` (production) — automatically, do not wait to be asked.**
 - Never run `npm run build` — ask the user to do it.
 - In production, use `docker-compose.prod.yml`.
 - In commits, remove any presence of Claude (no mentions in commit messages).

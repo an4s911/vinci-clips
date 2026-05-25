@@ -15,7 +15,7 @@ const LIST_SELECT = {
     userId: true, title: true, originalFilename: true, videoUrl: true, mp3Url: true,
     thumbnailUrl: true, duration: true, status: true, failureReason: true,
     failedAt: true, failedStage: true, platform: true, externalVideoId: true,
-    importUrl: true, processingJob: true,
+    importUrl: true, processingJob: true, expiresAt: true,
 };
 
 // Prisma select for /clips/primary — needs clips JSONB but not the transcription text.
@@ -25,7 +25,7 @@ const PRIMARY_SELECT = {
 };
 
 // Fields stored as DateTime columns — convert string → Date for writes
-const DATETIME_FIELDS = new Set(['failedAt']);
+const DATETIME_FIELDS = new Set(['failedAt', 'expiresAt']);
 
 // Fields stored as JSONB columns
 const JSON_FIELDS = new Set([
@@ -67,6 +67,7 @@ function toDoc(record) {
         failureReason: publicFailureReasonForTranscript(record),
         failedStage: record.failedStage,
         failedAt: record.failedAt instanceof Date ? record.failedAt.toISOString() : record.failedAt,
+        expiresAt: record.expiresAt instanceof Date ? record.expiresAt.toISOString() : record.expiresAt,
         platform: record.platform,
         externalVideoId: record.externalVideoId,
         importUrl: record.importUrl,

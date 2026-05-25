@@ -17,6 +17,7 @@ AI-powered video clipping platform for turning long-form videos into short clips
 - Track durable processing progress across page reloads.
 - Reframe generated clips for social platforms and add captions.
 - Export selected clips straight to a Google Drive folder (OAuth, background uploads with progress).
+- Auto-expire transcripts: every video (source files, clips, reframe assets) is deleted 24 hours after its pipeline finishes. The window resets on any new clip generation, render, reframe, or bulk-edit. Configurable via `TRANSCRIPT_TTL_HOURS`.
 - Multi-user ready auth with Postgres-backed sessions.
 
 ## Tech Stack
