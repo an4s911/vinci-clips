@@ -130,20 +130,10 @@ export default function Header({ className }: { className?: string }) {
       >
         <img
           src={isDark ? "/logo.png" : "/logo-name-light.png"}
-          alt="Vinci"
-          width="100"
-          height="32"
+          alt="SleeckOS"
+          width="150"
+          height="34"
         />
-        <span
-          style={{
-            fontSize: "1.5rem",
-            color: "#21dad2",
-            marginLeft: "0.0rem",
-            fontWeight: "950",
-          }}
-        >
-          clips
-        </span>
       </Link>
       <nav style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
         {user && (
