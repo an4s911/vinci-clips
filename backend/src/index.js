@@ -33,8 +33,6 @@ const configuredCorsOrigins = (process.env.CORS_ORIGIN || '')
 const allowedOrigins = [
     'http://localhost:3000',
     'http://localhost:3001',
-    'https://vinci-clips-frontend-382403086889.us-central1.run.app',
-    'https://clips.tryvinci.com',
     ...configuredCorsOrigins,
 ];
 

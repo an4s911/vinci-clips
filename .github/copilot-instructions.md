@@ -1,8 +1,8 @@
-# Copilot Instructions for Vinci Clips
+# Copilot Instructions for SleeckOS Clips
 
 ## Project Overview
 
-Vinci Clips is an AI-powered video clipping platform that automatically generates short, engaging clips from longer videos. The system uses AI to transcribe videos, analyze transcripts, and suggest optimal moments for clip creation.
+SleeckOS Clips is an AI-powered video clipping platform that automatically generates short, engaging clips from longer videos. The system uses AI to transcribe videos, analyze transcripts, and suggest optimal moments for clip creation.
 
 **Technology Stack:**
 - **Frontend:** Next.js 15.3.5 with React 19, TypeScript, Tailwind CSS 4.0

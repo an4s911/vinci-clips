@@ -135,7 +135,7 @@ export default function LoginPage() {
         }}
       >
         <div style={{ marginBottom: "2rem", textAlign: "center" }}>
-          <img src="/logo.png" alt="Vinci" width="100" height="32" style={{ display: "inline-block" }} />
+          <img src="/logo.png" alt="Sleeck" width="100" height="32" style={{ display: "inline-block" }} />
           <span
             style={{
               fontSize: "1.5rem",

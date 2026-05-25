@@ -14,18 +14,9 @@
     "nextjs",
     "nodejs"
   ],
-  "homepage": "https://tryvinci.com",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/tryvinci/vinci-clips.git"
-  },
-  "bugs": {
-    "url": "https://github.com/tryvinci/vinci-clips/issues"
-  },
   "license": "AGPL-3.0-or-later",
   "author": {
-    "name": "Vinci",
-    "url": "https://tryvinci.com"
+    "name": "Sleeck"
   },
   "engines": {
     "node": ">=18.0.0",

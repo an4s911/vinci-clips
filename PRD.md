@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-Vinci Clips is an AI-powered video clipping platform that automatically generates short, engaging video clips from longer videos with advanced features for social media optimization. The platform supports video uploads, URL imports from major platforms, AI-driven clip analysis, auto-reframing for different aspect ratios, AI-generated B-roll, captioning, and direct social media publishing.
+SleeckOS Clips is an AI-powered video clipping platform that automatically generates short, engaging video clips from longer videos with advanced features for social media optimization. The platform supports video uploads, URL imports from major platforms, AI-driven clip analysis, auto-reframing for different aspect ratios, AI-generated B-roll, captioning, and direct social media publishing.
 
 ## 2. High-Level Architecture
 

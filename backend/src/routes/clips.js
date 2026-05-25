@@ -217,7 +217,7 @@ router.post('/download-zip', async (req, res) => {
         const archive = archiver('zip', { zlib: { level: 9 } });
         const usedNames = new Set();
 
-        res.attachment('vinci-primary-clips.zip');
+        res.attachment('sleeck-primary-clips.zip');
         archive.on('error', (error) => {
             console.error('Archive stream error:', error);
             res.destroy(error);

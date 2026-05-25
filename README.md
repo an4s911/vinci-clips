@@ -1,4 +1,4 @@
-# Vinci Clips
+# SleeckOS Clips
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen)](https://nodejs.org/)
@@ -283,7 +283,7 @@ CLAUDE.md             Agent notes
 
 ## External API
 
-Vinci Clips exposes a small machine-to-machine HTTP API so external services can trigger the video pipeline and poll progress without a browser session.
+SleeckOS Clips exposes a small machine-to-machine HTTP API so external services can trigger the video pipeline and poll progress without a browser session.
 
 ### Authentication
 
@@ -376,4 +376,4 @@ Login: http://localhost/login
 
 ## License
 
-Vinci Clips is licensed under the GNU Affero General Public License v3.0. See [LICENSE](./LICENSE).
+SleeckOS Clips is licensed under the GNU Affero General Public License v3.0. See [LICENSE](./LICENSE).

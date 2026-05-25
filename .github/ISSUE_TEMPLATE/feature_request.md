@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest an idea for Vinci Clips
+about: Suggest an idea for SleeckOS Clips
 title: '[FEATURE] '
 labels: ['enhancement']
 assignees: ''

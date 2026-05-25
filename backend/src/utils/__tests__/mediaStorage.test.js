@@ -18,7 +18,7 @@ const {
     resolveLocalMediaPath,
 } = require('../mediaStorage');
 
-const testRoot = path.join('/tmp', 'vinci-clips-media-storage-tests');
+const testRoot = path.join('/tmp', 'sleeck-clips-media-storage-tests');
 
 async function writeOldFile(relativePath, contents = 'test') {
     const filePath = path.join(testRoot, relativePath);

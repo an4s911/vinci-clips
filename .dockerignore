@@ -1,4 +1,4 @@
-# Docker ignore file for Vinci Clips
+# Docker ignore file for SleeckOS Clips
 
 # Node modules
 **/node_modules

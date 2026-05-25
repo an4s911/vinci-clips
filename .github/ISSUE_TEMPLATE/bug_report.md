@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Create a report to help us improve Vinci Clips
+about: Create a report to help us improve SleeckOS Clips
 title: '[BUG] '
 labels: ['bug']
 assignees: ''
@@ -27,7 +27,7 @@ A clear and concise description of what actually happened.
 - Browser: [e.g. Chrome 120, Safari 17, Firefox 121]
 - Browser Version: [e.g. 120.0.6099.109]
 
-**Vinci Clips:**
+**SleeckOS Clips:**
 - Version/Commit: [e.g. latest, commit hash if known]
 - Deployment: [e.g. local development, production]
 

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Vinci Clips: AI video clipping platform. Upload/import videos → transcribe → AI clip analysis → generate clips with captions and reframing.
+SleeckOS Clips: AI video clipping platform. Upload/import videos → transcribe → AI clip analysis → generate clips with captions and reframing.
 
 **Stack:**
 - **Frontend:** Next.js 15, React, TypeScript, Tailwind CSS, shadcn/ui

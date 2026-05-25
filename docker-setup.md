@@ -1,6 +1,6 @@
-# Docker Setup for Vinci Clips
+# Docker Setup for SleeckOS Clips
 
-This guide explains how to run Vinci Clips using Docker for both development and production environments.
+This guide explains how to run SleeckOS Clips using Docker for both development and production environments.
 
 ## Prerequisites
 

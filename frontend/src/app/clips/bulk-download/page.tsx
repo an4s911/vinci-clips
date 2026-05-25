@@ -58,7 +58,7 @@ function formatDuration(seconds: number | null) {
 
 function getDownloadFilename(disposition?: string) {
     const match = disposition?.match(/filename="?([^"]+)"?/i);
-    return match?.[1] || 'vinci-primary-clips.zip';
+    return match?.[1] || 'sleeck-primary-clips.zip';
 }
 
 function isErrorPayload(value: unknown): value is { details?: string; error?: string } {

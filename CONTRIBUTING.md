@@ -1,6 +1,6 @@
-# Contributing to Vinci Clips
+# Contributing to SleeckOS Clips
 
-Thank you for your interest in contributing to Vinci Clips! We welcome contributions from the community and appreciate your help in making this project better.
+Thank you for your interest in contributing to SleeckOS Clips! We welcome contributions from the community and appreciate your help in making this project better.
 
 ## 🚀 Quick Start for Contributors
 
@@ -8,8 +8,8 @@ Thank you for your interest in contributing to Vinci Clips! We welcome contribut
 
 1. **Fork and clone the repository:**
    ```bash
-   git clone https://github.com/your-username/vinci-clips.git
-   cd vinci-clips
+   git clone https://github.com/your-username/sleeck-clips.git
+   cd sleeck-clips
    ```
 
 2. **Install dependencies:**
@@ -207,7 +207,6 @@ Brief description of changes and motivation.
 
 ### Contact
 - **Maintainers:** Tag @maintainer-username in issues
-- **Email:** For security issues, email security@tryvinci.com
 
 ## 🎯 Development Priorities
 
@@ -240,4 +239,4 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be repor
 
 ---
 
-Thank you for contributing to Vinci Clips! Your efforts help make video content creation more accessible and powerful for everyone.
+Thank you for contributing to SleeckOS Clips! Your efforts help make video content creation more accessible and powerful for everyone.
