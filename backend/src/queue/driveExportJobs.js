@@ -19,7 +19,7 @@ function driveExportJobId(exportId, itemIndex) {
     return `drive-export-${exportId}-${itemIndex}`;
 }
 
-async function enqueueDriveExportItem({ exportId, itemIndex, transcriptId, clipIndex, videoId, folderId, name }) {
+async function enqueueDriveExportItem({ exportId, itemIndex, transcriptId, clipIndex, videoId, folderId, name, overlayPath }) {
     const jobId = driveExportJobId(exportId, itemIndex);
     const existing = await driveExportQueue.getJob(jobId).catch(() => null);
     if (existing) {
@@ -30,7 +30,7 @@ async function enqueueDriveExportItem({ exportId, itemIndex, transcriptId, clipI
 
     await driveExportQueue.add(
         `drive-export:${exportId}:${itemIndex}`,
-        { type: 'drive-export', exportId, itemIndex, transcriptId, clipIndex, videoId, folderId, name },
+        { type: 'drive-export', exportId, itemIndex, transcriptId, clipIndex, videoId, folderId, name, overlayPath: overlayPath || null },
         {
             jobId,
             attempts: DRIVE_EXPORT_ATTEMPTS,

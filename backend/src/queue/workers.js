@@ -9,6 +9,8 @@
  *   type:'clip-render'   → runReframeRender / runCaptionRender
  */
 
+const path = require('path');
+const crypto = require('crypto');
 const { Worker, UnrecoverableError } = require('bullmq');
 const connection = require('./connection');
 const { executeStage, handleStageTerminalFailure, maybeFinalizeTranscriptClips, maybeFinalizeBulkEdit } = require('./pipeline');
@@ -32,6 +34,8 @@ const { toUnrecoverableIfNonRetryable } = require('./cancellation');
 const { resolveClipFilePath, patchItem } = require('../utils/driveExports');
 const { uploadFile } = require('../utils/googleDrive');
 const logger = require('../utils/logger');
+const ffmpeg = require('fluent-ffmpeg');
+const fsPromises = require('fs').promises;
 
 // Stages where YOUTUBE_AUTH_REQUIRED should not be retried — retrying when the IP is
 // blocked is pointless and wastes queue capacity.
@@ -346,11 +350,44 @@ function isStaleClipError(err) {
     return m.includes('not found') || m.includes('no longer') || m.includes('missing on disk');
 }
 
+const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
+const UPLOADS_TEMP = path.join(BACKEND_ROOT, 'uploads', 'temp');
+
+function probeVideoDimensions(filePath) {
+    return new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(filePath, (err, meta) => {
+            if (err) return reject(err);
+            const stream = meta.streams?.find(s => s.codec_type === 'video');
+            if (!stream?.width || !stream?.height) return reject(new Error('Could not read video dimensions.'));
+            resolve({ width: stream.width, height: stream.height });
+        });
+    });
+}
+
+function applyOverlay(clipPath, overlayPath, exportId, itemIndex) {
+    const tempFile = path.join(UPLOADS_TEMP, `overlay-${exportId}-${itemIndex}-${crypto.randomUUID()}.mp4`);
+    return new Promise((resolve, reject) => {
+        probeVideoDimensions(clipPath).then(({ width, height }) => {
+            ffmpeg(clipPath)
+                .input(overlayPath)
+                .complexFilter([
+                    `[1:v]scale=${width}:${height}[ov]`,
+                    '[0:v][ov]overlay=0:0:format=auto[out]',
+                ])
+                .outputOptions(['-map [out]', '-map 0:a?', '-c:v libx264', '-crf 23', '-preset medium', '-c:a copy', '-movflags +faststart'])
+                .output(tempFile)
+                .on('end', () => resolve(tempFile))
+                .on('error', reject)
+                .run();
+        }).catch(reject);
+    });
+}
+
 function createDriveExportWorker(concurrency) {
     const worker = new Worker(
         'drive-export',
         async (job) => {
-            const { exportId, itemIndex, transcriptId, clipIndex, videoId, folderId, name } = job.data;
+            const { exportId, itemIndex, transcriptId, clipIndex, videoId, folderId, name, overlayPath } = job.data;
             logger.info(`Drive-export worker: item ${itemIndex} of export ${exportId}`, { attemptsMade: job.attemptsMade });
 
             await patchItem(exportId, itemIndex, { status: 'running', error: null }).catch(() => {});
@@ -363,7 +400,30 @@ function createDriveExportWorker(concurrency) {
                 throw new UnrecoverableError(err.message);
             }
 
-            await uploadFile({ filePath, name, folderId });
+            let tempOverlayFile = null;
+            let uploadPath = filePath;
+            if (overlayPath) {
+                try {
+                    const dims = await probeVideoDimensions(filePath);
+                    const ratio = dims.width / dims.height;
+                    const isNineBySixteen = Math.abs(ratio - 9 / 16) < 0.02;
+                    if (isNineBySixteen) {
+                        tempOverlayFile = await applyOverlay(filePath, overlayPath, exportId, itemIndex);
+                        uploadPath = tempOverlayFile;
+                    } else {
+                        logger.info(`Drive-export: skipping overlay for non-9:16 clip (ratio ${ratio.toFixed(3)})`, { exportId, itemIndex });
+                    }
+                } catch (overlayErr) {
+                    // Non-fatal: if overlay fails, upload the original clip.
+                    logger.warn('Drive-export: overlay composite failed, uploading original', { exportId, itemIndex, error: overlayErr.message });
+                }
+            }
+
+            try {
+                await uploadFile({ filePath: uploadPath, name, folderId });
+            } finally {
+                if (tempOverlayFile) fsPromises.unlink(tempOverlayFile).catch(() => {});
+            }
             await patchItem(exportId, itemIndex, { status: 'done', error: null });
         },
         { connection, concurrency, lockDuration: PIPELINE_LOCK_DURATION_MS, maxStalledCount: PIPELINE_MAX_STALLED }

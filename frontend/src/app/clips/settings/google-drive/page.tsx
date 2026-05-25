@@ -13,15 +13,27 @@ import {
   CheckCircle2,
   Link2,
   Unlink,
+  ImagePlus,
+  X,
 } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
+
+interface OverlayTemplate {
+  id: string;
+  path: string;
+  filename: string;
+  width: number;
+  height: number;
+  addedAt: string;
+}
 
 interface SavedFolder {
   id: string;
   driveFolderId: string;
   name: string;
   addedAt: string;
+  overlays: OverlayTemplate[];
 }
 
 interface DriveFolder {
@@ -39,6 +51,170 @@ function getErrorMessage(error: unknown, fallback: string) {
   return axios.isAxiosError<{ error?: string; details?: string }>(error)
     ? error.response?.data?.error || error.response?.data?.details || fallback
     : fallback;
+}
+
+function FolderRow({
+  folder,
+  deleting,
+  onRemove,
+  onFoldersChange,
+}: {
+  folder: SavedFolder;
+  deleting: boolean;
+  onRemove: () => void;
+  onFoldersChange: React.Dispatch<React.SetStateAction<SavedFolder[]>>;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [overlayError, setOverlayError] = useState("");
+  const [deletingOverlay, setDeletingOverlay] = useState<Record<string, boolean>>({});
+
+  const handleOverlayUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!fileInputRef.current) return;
+    fileInputRef.current.value = "";
+    if (!files.length) return;
+
+    setOverlayError("");
+
+    const checkRatio = (file: File) =>
+      new Promise<boolean>((resolve) => {
+        const img = new Image();
+        img.onload = () => { URL.revokeObjectURL(img.src); resolve(Math.abs(img.naturalWidth / img.naturalHeight - 9 / 16) < 0.01); };
+        img.onerror = () => { URL.revokeObjectURL(img.src); resolve(false); };
+        img.src = URL.createObjectURL(file);
+      });
+
+    for (const file of files) {
+      if (file.type !== "image/png") { setOverlayError(`"${file.name}": only PNG files are accepted.`); return; }
+      if (!(await checkRatio(file))) { setOverlayError(`"${file.name}": must be exactly 9:16 (e.g. 1080×1920).`); return; }
+    }
+
+    setUploading(true);
+    try {
+      for (const file of files) {
+        const form = new FormData();
+        form.append("overlay", file);
+        const res = await axios.post(
+          `${API_URL}/clips/google-drive/folders/${folder.id}/overlays`,
+          form,
+          { headers: { "Content-Type": "multipart/form-data" } }
+        );
+        onFoldersChange((prev) => prev.map((f) => (f.id === folder.id ? res.data.folder : f)));
+      }
+    } catch (err) {
+      setOverlayError(getErrorMessage(err, "Failed to upload overlay."));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDeleteOverlay = async (overlayId: string) => {
+    setDeletingOverlay((p) => ({ ...p, [overlayId]: true }));
+    setOverlayError("");
+    try {
+      const res = await axios.delete(
+        `${API_URL}/clips/google-drive/folders/${folder.id}/overlays/${overlayId}`
+      );
+      onFoldersChange((prev) => prev.map((f) => (f.id === folder.id ? res.data.folder : f)));
+    } catch (err) {
+      setOverlayError(getErrorMessage(err, "Failed to delete overlay."));
+    } finally {
+      setDeletingOverlay((p) => ({ ...p, [overlayId]: false }));
+    }
+  };
+
+  return (
+    <div className="group flex flex-col gap-2 px-4 py-3 hover:bg-muted/30">
+      {/* Folder header row */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <HardDrive className="h-4 w-4 text-muted-foreground shrink-0" />
+          <span className="text-sm font-medium truncate">{folder.name}</span>
+        </div>
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={onRemove}
+          disabled={deleting}
+          aria-label={`Remove "${folder.name}"`}
+          className="h-9 w-9 text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-all"
+        >
+          {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+        </Button>
+      </div>
+
+      {/* Overlay templates */}
+      <div className="pl-6">
+        {folder.overlays.length > 0 && (
+          <div className="flex flex-nowrap gap-2 mb-2 overflow-x-auto pb-2">
+            {folder.overlays.map((ov) => (
+              <div
+                key={ov.id}
+                className="relative group/ov flex-shrink-0 w-10 rounded border border-border overflow-hidden"
+                style={{
+                  aspectRatio: "9/16",
+                  backgroundImage: "linear-gradient(45deg,#ccc 25%,transparent 25%),linear-gradient(-45deg,#ccc 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ccc 75%),linear-gradient(-45deg,transparent 75%,#ccc 75%)",
+                  backgroundSize: "8px 8px",
+                  backgroundPosition: "0 0,0 4px,4px -4px,-4px 0",
+                }}
+                title={`${ov.width}×${ov.height}`}
+              >
+                <img
+                  src={`${API_URL}${ov.path}`}
+                  alt="overlay"
+                  className="w-full h-full object-contain"
+                />
+                <button
+                  onClick={() => handleDeleteOverlay(ov.id)}
+                  disabled={deletingOverlay[ov.id]}
+                  className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 group-hover/ov:opacity-100 transition-opacity rounded"
+                  aria-label="Delete overlay"
+                >
+                  {deletingOverlay[ov.id] ? (
+                    <Loader2 className="h-3 w-3 text-white animate-spin" />
+                  ) : (
+                    <X className="h-3 w-3 text-white" />
+                  )}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png"
+            multiple
+            className="hidden"
+            onChange={handleOverlayUpload}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {uploading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ImagePlus className="h-3.5 w-3.5" />
+            )}
+            {uploading ? "Uploading…" : "Add overlay template"}
+          </button>
+          {folder.overlays.length > 0 && (
+            <span className="text-xs text-muted-foreground">
+              ({folder.overlays.length} template{folder.overlays.length !== 1 ? "s" : ""})
+            </span>
+          )}
+        </div>
+        {overlayError && (
+          <p className="mt-1 text-xs text-destructive">{overlayError}</p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function GoogleDriveSettingsPage() {
@@ -281,25 +457,16 @@ export default function GoogleDriveSettingsPage() {
             <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
               Export folders ({folders.length})
             </h3>
-            <div className="rounded-2xl border bg-card/50 overflow-hidden divide-y divide-border/50 max-h-[420px] overflow-y-auto">
+            <div className="rounded-2xl border bg-card/50 overflow-hidden divide-y divide-border/50 max-h-[580px] overflow-y-auto">
               {folders.length ? (
                 folders.map((folder) => (
-                  <div key={folder.id} className="group flex items-center justify-between gap-3 px-4 py-3 hover:bg-muted/50">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <HardDrive className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <span className="text-sm font-medium truncate">{folder.name}</span>
-                    </div>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => removeFolder(folder.id)}
-                      disabled={deleting[folder.id]}
-                      aria-label={`Remove "${folder.name}"`}
-                      className="h-9 w-9 text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-all"
-                    >
-                      {deleting[folder.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                    </Button>
-                  </div>
+                  <FolderRow
+                    key={folder.id}
+                    folder={folder}
+                    deleting={!!deleting[folder.id]}
+                    onRemove={() => removeFolder(folder.id)}
+                    onFoldersChange={setFolders}
+                  />
                 ))
               ) : (
                 <div className="py-12 text-center text-sm text-muted-foreground">

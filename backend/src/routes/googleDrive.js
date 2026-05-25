@@ -1,5 +1,8 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
+const multer = require('multer');
 const prisma = require('../db/prisma');
 const {
     isConfigured,
@@ -16,10 +19,26 @@ const {
     getFolders,
     addFolder,
     removeFolder,
+    addOverlay,
+    removeOverlay,
 } = require('../utils/googleDriveSettings');
+const { validateOverlayImage } = require('../utils/overlayValidation');
 const { createExport, resolveClipFilePath } = require('../utils/driveExports');
 const { enqueueDriveExportItem } = require('../queue/driveExportJobs');
 const logger = require('../utils/logger');
+
+const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
+const OVERLAYS_DIR = path.join(BACKEND_ROOT, 'uploads', 'overlays');
+if (!fs.existsSync(OVERLAYS_DIR)) fs.mkdirSync(OVERLAYS_DIR, { recursive: true });
+
+const overlayUpload = multer({
+    dest: path.join(BACKEND_ROOT, 'uploads', 'temp'),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+        if (file.mimetype === 'image/png') return cb(null, true);
+        cb(new Error('Only PNG files are accepted.'));
+    },
+});
 
 const router = express.Router();
 
@@ -135,10 +154,71 @@ router.post('/folders', async (req, res) => {
 
 router.delete('/folders/:id', async (req, res) => {
     try {
-        const folders = await removeFolder(req.params.id);
+        const { folders, removed } = await removeFolder(req.params.id);
+        // Clean up any overlay files for the deleted folder.
+        if (removed?.overlays?.length) {
+            for (const ov of removed.overlays) {
+                const absPath = path.join(OVERLAYS_DIR, path.basename(ov.path));
+                fs.unlink(absPath, () => {});
+            }
+        }
         res.json({ folders });
     } catch (error) {
         res.status(500).json({ error: 'Failed to remove folder.', details: error.message });
+    }
+});
+
+// ─── Overlay templates ────────────────────────────────────────────────────────
+
+router.post('/folders/:id/overlays', (req, res, next) => {
+    overlayUpload.single('overlay')(req, res, (err) => {
+        if (err) return res.status(400).json({ error: err.message || 'File upload failed.' });
+        next();
+    });
+}, async (req, res) => {
+    const tempPath = req.file?.path;
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'An overlay PNG file is required.' });
+        }
+
+        let dims;
+        try {
+            dims = await validateOverlayImage(tempPath);
+        } catch (validationErr) {
+            return res.status(400).json({ error: validationErr.message });
+        }
+
+        const overlayId = crypto.randomUUID();
+        const filename = `${overlayId}.png`;
+        const destPath = path.join(OVERLAYS_DIR, filename);
+        fs.renameSync(tempPath, destPath);
+
+        const folder = await addOverlay(req.params.id, {
+            id: overlayId,
+            path: `/uploads/overlays/${filename}`,
+            filename,
+            width: dims.width,
+            height: dims.height,
+        });
+
+        res.status(201).json({ folder });
+    } catch (error) {
+        if (tempPath) fs.unlink(tempPath, () => {});
+        res.status(error.message === 'Folder not found.' ? 404 : 500).json({ error: error.message });
+    }
+});
+
+router.delete('/folders/:id/overlays/:overlayId', async (req, res) => {
+    try {
+        const { folder, removed } = await removeOverlay(req.params.id, req.params.overlayId);
+        if (removed?.filename) {
+            const absPath = path.join(OVERLAYS_DIR, path.basename(removed.filename));
+            fs.unlink(absPath, () => {});
+        }
+        res.json({ folder });
+    } catch (error) {
+        res.status(error.message === 'Folder not found.' ? 404 : 500).json({ error: error.message });
     }
 });
 
@@ -158,6 +238,15 @@ router.post('/export', async (req, res) => {
         // Validate the target folder and resolve its display name.
         const saved = (await getFolders()).find(f => f.driveFolderId === folderId);
         const folderName = saved?.name || (await getFolder(folderId)).name;
+
+        // Pick one overlay for the entire export batch (random per export).
+        const overlays = saved?.overlays || [];
+        let overlayAbsPath = null;
+        if (overlays.length > 0) {
+            const chosen = overlays[Math.floor(Math.random() * overlays.length)];
+            overlayAbsPath = path.join(OVERLAYS_DIR, path.basename(chosen.filename));
+            if (!fs.existsSync(overlayAbsPath)) overlayAbsPath = null;
+        }
 
         // Validate every clip up front (existence + file on disk) so a bad payload
         // fails fast rather than partway through the queue.
@@ -183,6 +272,7 @@ router.post('/export', async (req, res) => {
                 videoId: item.videoId,
                 folderId,
                 name: `${item.videoId}.mp4`,
+                overlayPath: overlayAbsPath || undefined,
             });
         }
 

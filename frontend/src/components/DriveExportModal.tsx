@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import Link from "next/link";
-import { Loader2, Search, HardDrive, UploadCloud } from "lucide-react";
+import { Loader2, Search, HardDrive, UploadCloud, Image } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -22,6 +22,7 @@ interface SavedFolder {
   id: string;
   driveFolderId: string;
   name: string;
+  overlays?: { id: string }[];
 }
 
 interface AuthStatus {
@@ -138,7 +139,16 @@ export default function DriveExportModal({
                     }`}
                   >
                     <HardDrive className="h-4 w-4 shrink-0 opacity-70" />
-                    <span className="truncate">{f.name}</span>
+                    <span className="truncate flex-1">{f.name}</span>
+                    {(f.overlays?.length ?? 0) > 0 && (
+                      <span
+                        title={`${f.overlays!.length} overlay template${f.overlays!.length !== 1 ? "s" : ""}`}
+                        className={`flex items-center gap-0.5 text-xs opacity-70 ${selected === f.driveFolderId ? "text-primary-foreground" : "text-muted-foreground"}`}
+                      >
+                        <Image className="h-3 w-3" />
+                        {f.overlays!.length}
+                      </span>
+                    )}
                   </button>
                 ))
               ) : (
@@ -149,6 +159,16 @@ export default function DriveExportModal({
             </div>
           </>
         )}
+
+        {(() => {
+          const sel = folders.find((f) => f.driveFolderId === selected);
+          return sel && (sel.overlays?.length ?? 0) > 0 ? (
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Image className="h-3.5 w-3.5 shrink-0" />
+              Overlay template will be applied to all clips.
+            </p>
+          ) : null;
+        })()}
 
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
 

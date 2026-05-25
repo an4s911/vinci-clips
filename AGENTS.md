@@ -125,6 +125,20 @@ Each export is a `DriveExport` row (Prisma) with a per-clip `items` array. `POST
 
 **Resilience:** multiple exports run concurrently. Stalled jobs are re-claimed by BullMQ on restart; queue-dropped items are re-enqueued by `reconcileDriveExports` in `reconcile.js` (capped per item). The frontend `DriveExportsProvider` polls `/exports?status=active` and renders a global tray on every page, so concurrent exports across transcripts/pages are all tracked.
 
+### Per-folder overlay templates
+
+Each saved Drive folder may have zero or more **overlay template** PNGs attached. Overlays are stored in `backend/uploads/overlays/<uuid>.png` and their metadata lives inside the folder's entry in `AppSetting` key `googleDriveFolders` (`overlays: [{ id, path, filename, width, height, addedAt }]`). Managed by `addOverlay`/`removeOverlay`/`getFolderById` in `googleDriveSettings.js`.
+
+**Routes** (under `/clips/google-drive/folders/:id/overlays`):
+- `POST` — multer single PNG upload; validated by `backend/src/utils/overlayValidation.js` (ffprobe: alpha channel required, exact 9:16 ratio, e.g. 1080×1920). Rejects with 400 on validation failure.
+- `DELETE /:overlayId` — removes DB entry and unlinks the file from disk.
+
+**Enforcement:** PNG must have an alpha (transparency) channel (`pix_fmt` in ALPHA_PIX_FMTS set) and width/height ratio within 1e-3 of 9/16. Checked backend (authoritative) and client-side (fast feedback).
+
+**Export behaviour:** `POST /export` picks **one overlay at random once per export batch** (all clips in the batch get the same template). The chosen overlay's absolute path is threaded into each job payload as `overlayPath`. In the drive-export worker (`workers.js:createDriveExportWorker`), if `overlayPath` is set, the clip is first probed for dimensions; if the ratio is ~9:16, FFmpeg composites the overlay (`scale` to clip W×H then `overlay=0:0:format=auto`) into a temp file in `uploads/temp/`, which is uploaded instead of the original. The temp file is deleted after upload. Overlay composite failures are non-fatal — the original clip is uploaded as a fallback.
+
+**⚠ Non-9:16 clips:** overlay is skipped (original uploaded unchanged). This skip branch (`isNineBySixteen` check in `workers.js`) should be **revisited/removed** once other aspect ratios (Instagram square, YouTube landscape) are removed from the platform.
+
 ### Adding a new pipeline stage
 
 1. Add descriptor to `PIPELINE_STAGES` in `backend/src/queue/stages.js`
